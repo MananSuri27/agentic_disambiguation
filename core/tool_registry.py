@@ -60,7 +60,6 @@ class ArgumentDomain:
     def is_valid(self, value: Any) -> bool:
         """Check if a value is valid for this domain."""
 
-        return True
         if self.validator:
             return self.validator(value)
             
@@ -220,8 +219,7 @@ class ToolRegistry:
             tool_desc = f"Tool: {tool_name}\nDescription: {tool.description}\nArguments:"
             
             for arg in tool.arguments:
-                domain_desc = str(arg.domain)
-                arg_desc = f"  - {arg.name}: {domain_desc}"
+                arg_desc = f"  - {arg.name}: "
                 if arg.description:
                     arg_desc += f" - {arg.description}"
                 if not arg.required:

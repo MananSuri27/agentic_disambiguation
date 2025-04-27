@@ -100,7 +100,7 @@ class SimulationEvaluator:
         
         return metrics
     
-    def _calculate_correctness_metrics(
+    def _calculate_correctness_metrics_old(
         self,
         ground_truth: List[Dict[str, Any]],
         final_tool_calls: List[Dict[str, Any]]
@@ -146,11 +146,23 @@ class SimulationEvaluator:
             # Find matching tool call
             matching_tc = None
             for tc in final_tool_calls:
+                RED = "\033[91m"
+                RESET = "\033[0m"
+
+                logger.info(RED + "DEBUG HIGHLIGHT: %s" + RESET, tc, gt_tc)
+
+                
                 if tc.get("tool_name") == gt_tool_name:
                     matching_tc = tc
                     break
+                
             
             if matching_tc:
+                RED = "\033[91m"
+                RESET = "\033[0m"
+
+                logger.info(RED + "DEBUG HIGHLIGHT: matching_tc = %s" + RESET, matching_tc)
+
                 actual_params = matching_tc.get("parameters", {})
                 
                 # Count parameters
@@ -170,7 +182,94 @@ class SimulationEvaluator:
             "param_match_rate": param_match_rate,
             "tools_fully_matched_rate": 1.0 if tool_match_rate == 1.0 else 0.0
         }
-    
+
+
+    def _calculate_correctness_metrics(
+    self,
+    ground_truth: List[Dict[str, Any]],
+    final_tool_calls: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+        """
+        Calculate correctness metrics - whether tool calls match ground truth.
+        
+        Args:
+            ground_truth: Ground truth tool calls
+            final_tool_calls: Final tool calls from the simulation
+            
+        Returns:
+            Correctness metrics
+        """
+        if not ground_truth:
+            return {
+                "exact_match": False,
+                "tool_match_rate": 0.0,
+                "param_match_rate": 0.0,
+                "tools_fully_matched_rate": 0.0
+            }
+            
+        # Create sets of tool names for comparison
+        gt_tool_names = {tc.get("tool_name") for tc in ground_truth}
+        actual_tool_names = {tc.get("tool_name") for tc in final_tool_calls}
+        
+        # Calculate tool match rate
+        if not gt_tool_names:
+            tool_match_rate = 0.0
+        else:
+            # Calculate intersection
+            matching_tools = gt_tool_names.intersection(actual_tool_names)
+            tool_match_rate = len(matching_tools) / len(gt_tool_names)
+        
+        # Calculate parameter match rate
+        total_params = 0
+        matching_params = 0
+        
+        for gt_tc in ground_truth:
+            gt_tool_name = gt_tc.get("tool_name")
+            gt_params = gt_tc.get("parameters", {})
+            
+
+            
+            # Find matching tool call
+            matching_tc = None
+            for tc in final_tool_calls:
+                if tc.get("tool_name") == gt_tool_name:
+                    matching_tc = tc
+                    break
+            
+            if matching_tc:
+                actual_params = matching_tc.get("arguments", {})
+                
+                # Count parameters
+                for param_name, gt_value in gt_params.items():
+                    total_params += 1
+                    
+                    if param_name in actual_params:
+                        actual_val = actual_params[param_name]
+                        
+                        # Check for direct equality first
+                        if actual_val == gt_value:
+                            # Direct match
+                            matching_params += 1
+                        # Check if one is a single-element list containing the other
+                        elif (isinstance(actual_val, list) and len(actual_val) == 1 and actual_val[0] == gt_value) or \
+                            (isinstance(gt_value, list) and len(gt_value) == 1 and gt_value[0] == actual_val):
+                            # Single-element list matches the other value
+                            matching_params += 1
+
+        
+        param_match_rate = matching_params / total_params if total_params > 0 else 0.0
+        
+
+        # Check for exact match of tool calls (success)
+        exact_match = self._check_exact_match(ground_truth, final_tool_calls)
+        
+        return {
+            "exact_match": exact_match,
+            "tool_match_rate": tool_match_rate,
+            "param_match_rate": param_match_rate,
+            "tools_fully_matched_rate": 1.0 if tool_match_rate == 1.0 else 0.0
+        }
+
     def _check_exact_match(
         self,
         ground_truth: List[Dict[str, Any]],

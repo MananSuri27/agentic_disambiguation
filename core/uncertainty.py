@@ -156,10 +156,6 @@ class UncertaintyCalculator:
             arg_name = arg.name
             arg_value = tool_call.arguments.get(arg_name, "<UNK>")
             
-            # Skip optional arguments with no value
-            if not arg.required and arg_value == "<UNK>":
-                arg_certainties[arg_name] = 1.0
-                continue
             
             certainty = self.calculate_arg_certainty(tool, arg_name, arg_value)
             arg_certainties[arg_name] = certainty

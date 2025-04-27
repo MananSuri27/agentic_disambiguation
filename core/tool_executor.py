@@ -273,12 +273,10 @@ Error message: {error_result.message}
 Current tool calls:
 {[tc.to_dict() for tc in tool_calls]}
 
-Available tools:
-{tool_descriptions}
-
 Based on the error, I need two things:
 1. A clear, conversational clarification question to ask the user to help resolve the error
 2. An updated version of the tool calls that might resolve the error if the user doesn't provide more information
+3. Make sure names of the arguments are correct.
 
 Return your response as a JSON object with the following structure:
 {{
