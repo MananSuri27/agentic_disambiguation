@@ -847,3 +847,36 @@
 2025-04-27 17:48:39,513 - agentic_disambiguation - INFO - Executing tool calls
 2025-04-27 17:48:39,520 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_1_6_aug_RESULT.json
 2025-04-27 17:48:39,525 - agentic_disambiguation - INFO - Saved summary to simulation_results_test/summary.json
+2025-04-27 18:02:58,869 - agentic_disambiguation - INFO - Running simulation for sample_data/doc_2_61_aug.json
+2025-04-27 18:02:58,871 - agentic_disambiguation - INFO - Generating initial tool calls for: Can you redact all mentions of the new drug's name upto page 7 without overwriting the original file and then add the password "Secure123"?
+2025-04-27 18:03:02,738 - agentic_disambiguation - INFO - Initial overall certainty: 0.001
+2025-04-27 18:03:02,738 - agentic_disambiguation - INFO - Turn 1 of 10
+2025-04-27 18:03:02,738 - agentic_disambiguation - INFO - Current overall certainty: 0.001
+2025-04-27 18:03:05,148 - agentic_disambiguation - INFO - Asking clarification question: What is the name of the new drug that you would like to redact from the document?
+2025-04-27 18:03:06,429 - agentic_disambiguation - INFO - User response: The new drug's name that I need to redact is "Ha23-X." Please make sure this is applied up to page 7 while keeping the original document intact. Thank you!
+2025-04-27 18:03:08,002 - agentic_disambiguation - INFO - Turn 2 of 10
+2025-04-27 18:03:08,002 - agentic_disambiguation - INFO - Current overall certainty: 1.0
+2025-04-27 18:03:08,002 - agentic_disambiguation - INFO - Certainty is high enough (1.0000 > 0.9), proceeding to execution
+2025-04-27 18:03:08,002 - agentic_disambiguation - INFO - Executing tool calls
+2025-04-27 18:03:08,010 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_2_61_aug_RESULT.json
+2025-04-27 18:03:08,010 - agentic_disambiguation - INFO - Running simulation for sample_data/doc_1_31_aug.json
+2025-04-27 18:03:08,012 - agentic_disambiguation - INFO - Generating initial tool calls for: Can you underline the text 'create' from pages 2 to 15 of the document and save it as "underlined_lists_document.pdf"?
+2025-04-27 18:03:11,214 - agentic_disambiguation - INFO - Initial overall certainty: 1.0
+2025-04-27 18:03:11,214 - agentic_disambiguation - INFO - Turn 1 of 10
+2025-04-27 18:03:11,214 - agentic_disambiguation - INFO - Current overall certainty: 1.0
+2025-04-27 18:03:11,214 - agentic_disambiguation - INFO - Certainty is high enough (1.0000 > 0.9), proceeding to execution
+2025-04-27 18:03:11,215 - agentic_disambiguation - INFO - Executing tool calls
+2025-04-27 18:03:11,222 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_1_31_aug_RESULT.json
+2025-04-27 18:03:11,222 - agentic_disambiguation - INFO - Running simulation for sample_data/doc_1_6_aug.json
+2025-04-27 18:03:11,224 - agentic_disambiguation - INFO - Generating initial tool calls for: Can you rename a file for me?
+2025-04-27 18:03:13,399 - agentic_disambiguation - INFO - Initial overall certainty: 0.001
+2025-04-27 18:03:13,399 - agentic_disambiguation - INFO - Turn 1 of 10
+2025-04-27 18:03:13,399 - agentic_disambiguation - INFO - Current overall certainty: 0.001
+2025-04-27 18:03:14,617 - agentic_disambiguation - INFO - Asking clarification question: What would you like to rename the file to?
+2025-04-27 18:03:15,714 - agentic_disambiguation - INFO - User response: I’d like to rename it to "ProjectOverview_2023." This should help me keep everything organized and up-to-date with the content I’m working on this year.
+2025-04-27 18:03:21,453 - agentic_disambiguation - INFO - Turn 2 of 10
+2025-04-27 18:03:21,453 - agentic_disambiguation - INFO - Current overall certainty: 1.0
+2025-04-27 18:03:21,453 - agentic_disambiguation - INFO - Certainty is high enough (1.0000 > 0.9), proceeding to execution
+2025-04-27 18:03:21,454 - agentic_disambiguation - INFO - Executing tool calls
+2025-04-27 18:03:21,460 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_1_6_aug_RESULT.json
+2025-04-27 18:03:21,465 - agentic_disambiguation - INFO - Saved summary to simulation_results_test/summary.json

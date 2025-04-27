@@ -2,6 +2,9 @@ from typing import Dict, List, Any, Optional, Tuple
 import logging
 import json
 import copy
+from core.tool_registry import ToolRegistry
+from core.uncertainty import ToolCall
+from core.tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +14,8 @@ class MockAPIClient:
     def __init__(
         self,
         ground_truth: Dict[str, Any],
-        strict_validation: bool = False
+        strict_validation: bool = False,
+        tool_registry: Optional[ToolRegistry] = None
     ):
         """
         Initialize a mock API client.
@@ -19,9 +23,11 @@ class MockAPIClient:
         Args:
             ground_truth: Ground truth data for validation
             strict_validation: Whether to require exact parameter matching
+            tool_registry: Registry of tool definitions (optional)
         """
         self.ground_truth = ground_truth
         self.strict_validation = strict_validation
+        self.tool_registry = tool_registry
         
         # Extract ground truth tool calls
         self.gt_tool_calls = ground_truth.get("ground_truth_tool_calls", [])
@@ -32,6 +38,11 @@ class MockAPIClient:
             tool_name = tc.get("tool_name")
             if tool_name:
                 self.gt_tool_call_map[tool_name] = tc
+                
+        # Create a tool executor if we have a registry
+        self.tool_executor = None
+        if tool_registry:
+            self.tool_executor = ToolExecutor(tool_registry, self)
     
     def execute_tool(
         self,
@@ -41,9 +52,8 @@ class MockAPIClient:
         """
         Execute a tool call via the mock API.
         
-        Important distinction: This method executes ANY valid tool call
-        (one that has all required parameters), even if parameters 
-        don't match ground truth. However, it provides feedback about
+        This method executes ANY valid tool call (one that has all required parameters),
+        even if parameters don't match ground truth. However, it provides feedback about
         parameter correctness.
         
         Args:
@@ -53,7 +63,7 @@ class MockAPIClient:
         Returns:
             Execution result
         """
-        # First check if the tool exists in ground truth
+        # First check if the tool exists in ground truth (for simulation purposes)
         if tool_name not in self.gt_tool_call_map:
             return {
                 "success": False,
@@ -61,27 +71,54 @@ class MockAPIClient:
                 "error": "INVALID_TOOL"
             }
         
-        # Get the ground truth parameters
-        gt_params = self.gt_tool_call_map[tool_name].get("parameters", {})
-        
-        # For required parameters, check if they're provided
-        missing_params = []
-        for param_name in gt_params:
-            if param_name not in parameters:
-                missing_params.append(param_name)
-        
-        # If missing required parameters, fail execution
-        if missing_params:
-            return {
-                "success": False,
-                "message": f"Missing required parameters: {', '.join(missing_params)}",
-                "error": "MISSING_PARAMS",
-                "details": {
-                    "missing_params": missing_params
+        # If we have a tool registry, use it to validate the call properly
+        if self.tool_registry:
+            tool = self.tool_registry.get_tool(tool_name)
+            if not tool:
+                return {
+                    "success": False,
+                    "message": f"Tool '{tool_name}' not found in registry",
+                    "error": "UNKNOWN_TOOL"
                 }
-            }
+            
+            # Check required parameters
+            for arg in tool.arguments:
+                if arg.required and arg.name not in parameters:
+                    return {
+                        "success": False,
+                        "message": f"Missing required parameter: {arg.name}",
+                        "error": "MISSING_PARAMS",
+                        "details": {
+                            "missing_params": [arg.name]
+                        }
+                    }
+                
+                # Validate parameter values if present and not <UNK>
+                if arg.name in parameters and parameters[arg.name] != "<UNK>":
+                    if not arg.domain.is_valid(parameters[arg.name]):
+                        return {
+                            "success": False,
+                            "message": f"Invalid value for parameter {arg.name}: {parameters[arg.name]}",
+                            "error": "INVALID_PARAM_VALUE",
+                            "details": {
+                                "invalid_param": arg.name,
+                                "value": parameters[arg.name],
+                                "expected_domain": str(arg.domain)
+                            }
+                        }
         
-        # Compare parameters for correctness (but don't fail execution)
+        # Execute the tool with provided parameters
+        execution_result = {
+            "success": True,
+            "message": f"Tool '{tool_name}' executed successfully",
+            "output": {
+                "tool_name": tool_name,
+                "parameters": copy.deepcopy(parameters)
+            }
+        }
+        
+        # Compare parameters for correctness after successful execution
+        gt_params = self.gt_tool_call_map[tool_name].get("parameters", {})
         incorrect_params = []
         if self.strict_validation:
             for param_name, gt_value in gt_params.items():
@@ -92,19 +129,11 @@ class MockAPIClient:
                         "actual": parameters[param_name]
                     })
         
-        # Check for extra parameters (informational only)
-        extra_params = [p for p in parameters if p not in gt_params]
+        # Check for missing parameters compared to ground truth
+        missing_in_gt = [p for p in gt_params if p not in parameters]
         
-        # Execute the tool with provided parameters
-        # Note: The execution succeeds as long as all required parameters are present
-        execution_result = {
-            "success": True,
-            "message": f"Tool '{tool_name}' executed successfully",
-            "output": {
-                "tool_name": tool_name,
-                "parameters": copy.deepcopy(parameters)
-            }
-        }
+        # Check for extra parameters compared to ground truth
+        extra_params = [p for p in parameters if p not in gt_params]
         
         # Add correctness information
         if incorrect_params:
@@ -119,6 +148,9 @@ class MockAPIClient:
         
         if extra_params:
             execution_result["extra_parameters"] = extra_params
+            
+        if missing_in_gt:
+            execution_result["missing_from_ground_truth"] = missing_in_gt
         
         return execution_result
     
