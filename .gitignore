@@ -1,0 +1,20 @@
+# Ignore all __pycache__ directories
+__pycache__/
+
+# Ignore any folder starting with simulation_results
+simulation_results*/
+
+# Ignore sample_data directory
+sample_data/
+
+# Ignore llms/ollama directory
+llm/ollama.py
+
+control_baseline.py
+cot_disambiguate.py
+ask_before_plan.py
+active_task.py
+
+text_scratch.txt
+
+

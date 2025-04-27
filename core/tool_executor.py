@@ -1,0 +1,267 @@
+from typing import Dict, List, Any, Tuple, Optional
+import logging
+from .tool_registry import ToolRegistry
+from .uncertainty import ToolCall
+
+logger = logging.getLogger(__name__)
+
+class ToolExecutionResult:
+    """Class representing the result of a tool execution."""
+    
+    def __init__(
+        self,
+        tool_name: str,
+        success: bool,
+        message: str,
+        error: Optional[str] = None,
+        output: Optional[Dict] = None
+    ):
+        """
+        Initialize a tool execution result.
+        
+        Args:
+            tool_name: Name of the executed tool
+            success: Whether the execution succeeded
+            message: Human-readable message about the execution
+            error: Error message if execution failed
+            output: Output of the tool if execution succeeded
+        """
+        self.tool_name = tool_name
+        self.success = success
+        self.message = message
+        self.error = error
+        self.output = output or {}
+    
+    def to_dict(self) -> Dict:
+        """Convert the execution result to a dictionary."""
+        result = {
+            "tool_name": self.tool_name,
+            "success": self.success,
+            "message": self.message
+        }
+        
+        if self.error:
+            result["error"] = self.error
+            
+        if self.output:
+            result["output"] = self.output
+            
+        return result
+
+
+class ToolExecutor:
+    """Class for executing tool calls."""
+    
+    def __init__(
+        self,
+        tool_registry: ToolRegistry,
+        mock_api_client
+    ):
+        """
+        Initialize a tool executor.
+        
+        Args:
+            tool_registry: Registry of available tools
+            mock_api_client: Client for mock API execution
+        """
+        self.tool_registry = tool_registry
+        self.mock_api_client = mock_api_client
+    
+    def validate_tool_call(self, tool_call: ToolCall) -> Tuple[bool, Optional[str]]:
+        """
+        Validate a tool call before execution.
+        
+        Args:
+            tool_call: Tool call to validate
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        tool = self.tool_registry.get_tool(tool_call.tool_name)
+        if not tool:
+            return False, f"Unknown tool: {tool_call.tool_name}"
+        
+        # Check required arguments
+        for arg in tool.arguments:
+            if arg.required and (arg.name not in tool_call.arguments or tool_call.arguments[arg.name] == "<UNK>"):
+                return False, f"Missing required argument: {arg.name}"
+            
+            # If the argument is provided, validate its value
+            if arg.name in tool_call.arguments and tool_call.arguments[arg.name] != "<UNK>":
+                value = tool_call.arguments[arg.name]
+                if not arg.domain.is_valid(value):
+                    return False, f"Invalid value for argument {arg.name}: {value}"
+        
+        return True, None
+    
+    def execute_tool_call(self, tool_call: ToolCall) -> ToolExecutionResult:
+        """
+        Execute a single tool call.
+        
+        Args:
+            tool_call: Tool call to execute
+            
+        Returns:
+            Execution result
+        """
+        # Validate the tool call
+        # is_valid, error = self.validate_tool_call(tool_call)
+        # if not is_valid:
+        #     return ToolExecutionResult(
+        #         tool_name=tool_call.tool_name,
+        #         success=False,
+        #         message=f"Validation failed: {error}",
+        #         error=error
+        #     )
+        
+        # Prepare parameters for execution
+        parameters = tool_call.to_execution_dict()["parameters"]
+        
+        try:
+            # Execute the tool call via mock API
+            result = self.mock_api_client.execute_tool(
+                tool_name=tool_call.tool_name,
+                parameters=parameters
+            )
+            
+            # Check if execution succeeded
+            if result.get("success", False):
+                return ToolExecutionResult(
+                    tool_name=tool_call.tool_name,
+                    success=True,
+                    message=result.get("message", "Tool executed successfully"),
+                    output=result.get("output", {})
+                )
+            else:
+                return ToolExecutionResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    message=result.get("message", "Tool execution failed"),
+                    error=result.get("error", "Unknown error")
+                )
+                
+        except Exception as e:
+            logger.exception(f"Error executing tool {tool_call.tool_name}")
+            return ToolExecutionResult(
+                tool_name=tool_call.tool_name,
+                success=False,
+                message=f"Error executing tool: {str(e)}",
+                error=str(e)
+            )
+    
+    def execute_tool_calls(self, tool_calls: List[ToolCall]) -> List[ToolExecutionResult]:
+
+        """
+        Execute a sequence of tool calls.
+        
+        Args:
+            tool_calls: List of tool calls to execute
+            
+        Returns:
+            List of execution results
+        """
+        results = []
+        
+        for tool_call in tool_calls:
+            result = self.execute_tool_call(tool_call)
+            results.append(result)
+            
+            # If execution failed, stop processing further tool calls
+            if not result.success:
+                break
+        
+        return results
+    
+
+    def generate_error_clarification(
+        self, 
+        error_result: ToolExecutionResult, 
+        tool_calls: List[ToolCall],
+        user_query: str,
+        llm_provider
+    ) -> Tuple[Optional[str], List[ToolCall]]:
+        """
+        Generate a clarification question based on an error.
+        
+        Args:
+            error_result: The error execution result
+            tool_calls: The current tool calls
+            user_query: Original user query
+            llm_provider: LLM provider for generating clarification
+            
+        Returns:
+            Tuple of (clarification question or None, updated tool calls)
+        """
+        # Prepare the prompt for error clarification
+        tool_descriptions = self.tool_registry.get_tool_descriptions()
+        
+        prompt = f"""
+You are an AI assistant that helps users by understanding their queries and executing tool calls.
+
+Original user query:
+"{user_query}"
+
+The following tool call resulted in an error:
+Tool: {error_result.tool_name}
+Error: {error_result.error}
+Error message: {error_result.message}
+
+Current tool calls:
+{[tc.to_dict() for tc in tool_calls]}
+
+Available tools:
+{tool_descriptions}
+
+Based on the error, I need two things:
+1. A clear, conversational clarification question to ask the user to help resolve the error
+2. An updated version of the tool calls that might resolve the error if the user doesn't provide more information
+
+Return your response as a JSON object with the following structure:
+{{
+  "clarification_question": "The question to ask the user",
+  "updated_tool_calls": [
+    {{
+      "tool_name": "tool_name",
+      "arguments": {{
+        "arg1": "value1",
+        "arg2": "value2"
+      }}
+    }}
+  ]
+}}
+"""
+        
+        # Call LLM to generate clarification
+        response = llm_provider.generate_json(
+            prompt=prompt,
+            response_model={
+                "clarification_question": "string",
+                "updated_tool_calls": [
+                    {
+                        "tool_name": "string",
+                        "arguments": {}
+                    }
+                ]
+            },
+            max_tokens=2000
+        )
+        
+        # Extract the clarification question
+        clarification_question = response.get("clarification_question")
+        
+        # Extract the updated tool calls
+        updated_tool_calls_data = response.get("updated_tool_calls", [])
+        updated_tool_calls = []
+        
+        for tc_data in updated_tool_calls_data:
+            tool_name = tc_data.get("tool_name", "")
+            arguments = tc_data.get("arguments", {})
+            
+            if tool_name:
+                updated_tool_calls.append(ToolCall(tool_name, arguments))
+        
+        # If no updated tool calls were provided, keep the original ones
+        if not updated_tool_calls:
+            updated_tool_calls = tool_calls
+        
+        return clarification_question, updated_tool_calls
