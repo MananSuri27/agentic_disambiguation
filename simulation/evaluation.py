@@ -39,8 +39,9 @@ class SimulationEvaluator:
         # Extract question metrics
         questions = simulation_result.get("questions", [])
         
-        # Calculate success metrics
-        success, tool_match_rate, param_match_rate = self._calculate_success_metrics(ground_truth, final_tool_calls)
+        # Calculate success metrics - distinction between valid and correct
+        validity_metrics = self._calculate_validity_metrics(final_tool_calls)
+        correctness_metrics = self._calculate_correctness_metrics(ground_truth, final_tool_calls)
         
         # Calculate conversation metrics
         conversation_metrics = self._calculate_conversation_metrics(conversation)
@@ -49,33 +50,78 @@ class SimulationEvaluator:
         question_metrics = self._calculate_question_metrics(questions)
         
         # Combine all metrics
-        metrics["success"] = success
-        metrics["tool_match_rate"] = tool_match_rate
-        metrics["tools_fully_matched_rate"] = 1.0 if tool_match_rate == 1.0 else 0.0
-        metrics["param_match_rate"] = param_match_rate
+        metrics["validity"] = validity_metrics
+        metrics["correctness"] = correctness_metrics
         metrics["conversation"] = conversation_metrics
         metrics["questions"] = question_metrics
         metrics["num_questions"] = len(questions)
         
+        # Overall success is achieved when tool calls are both valid and correct
+        metrics["success"] = validity_metrics["all_valid"] and correctness_metrics["exact_match"]
+        
         return metrics
     
-    def _calculate_success_metrics(
+    def _calculate_validity_metrics(
+        self,
+        final_tool_calls: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Calculate validity metrics - whether tool calls are executable.
+        
+        Args:
+            final_tool_calls: Final tool calls from the simulation
+            
+        Returns:
+            Validity metrics
+        """
+        metrics = {}
+        
+        valid_count = 0
+        total_count = len(final_tool_calls)
+        
+        for tc in final_tool_calls:
+            # Check if tool has all required parameters (not <UNK>)
+            is_valid = True
+            arguments = tc.get("arguments", {})
+            
+            # For this simulation, we consider a tool call valid if it doesn't have <UNK> values
+            for param, value in arguments.items():
+                if value == "<UNK>":
+                    is_valid = False
+                    break
+            
+            if is_valid:
+                valid_count += 1
+        
+        metrics["total_tool_calls"] = total_count
+        metrics["valid_tool_calls"] = valid_count
+        metrics["validity_rate"] = valid_count / total_count if total_count > 0 else 0.0
+        metrics["all_valid"] = valid_count == total_count
+        
+        return metrics
+    
+    def _calculate_correctness_metrics(
         self,
         ground_truth: List[Dict[str, Any]],
         final_tool_calls: List[Dict[str, Any]]
-    ) -> Tuple[bool, float, float]:
+    ) -> Dict[str, Any]:
         """
-        Calculate success metrics for the simulation.
+        Calculate correctness metrics - whether tool calls match ground truth.
         
         Args:
             ground_truth: Ground truth tool calls
             final_tool_calls: Final tool calls from the simulation
             
         Returns:
-            Tuple of (success, tool_match_rate, param_match_rate)
+            Correctness metrics
         """
         if not ground_truth:
-            return False, 0.0, 0.0
+            return {
+                "exact_match": False,
+                "tool_match_rate": 0.0,
+                "param_match_rate": 0.0,
+                "tools_fully_matched_rate": 0.0
+            }
             
         # Create sets of tool names for comparison
         gt_tool_names = {tc.get("tool_name") for tc in ground_truth}
@@ -116,51 +162,59 @@ class SimulationEvaluator:
         param_match_rate = matching_params / total_params if total_params > 0 else 0.0
         
         # Check for exact match of tool calls (success)
-        exact_match = True
-        if len(ground_truth) != len(final_tool_calls):
-            exact_match = False
-        else:
-            # Check each tool call
-            for gt_tc in ground_truth:
-                gt_tool_name = gt_tc.get("tool_name")
-                gt_params = gt_tc.get("parameters", {})
-                
-                # Find matching tool call
-                matching_tc = None
-                for tc in final_tool_calls:
-                    if tc.get("tool_name") == gt_tool_name:
-                        matching_tc = tc
-                        break
-                
-                if not matching_tc:
-                    exact_match = False
-                    break
-                    
-                # Compare parameters
-                actual_params = matching_tc.get("parameters", {})
-                
-                # Check for missing or extra parameters
-                if set(gt_params.keys()) != set(actual_params.keys()):
-                    exact_match = False
-                    break
-                    
-                # Check parameter values
-                for param_name, gt_value in gt_params.items():
-                    if param_name not in actual_params or actual_params[param_name] != gt_value:
-                        exact_match = False
-                        break
-                
-                if not exact_match:
-                    break
+        exact_match = self._check_exact_match(ground_truth, final_tool_calls)
         
-        return exact_match, tool_match_rate, param_match_rate
+        return {
+            "exact_match": exact_match,
+            "tool_match_rate": tool_match_rate,
+            "param_match_rate": param_match_rate,
+            "tools_fully_matched_rate": 1.0 if tool_match_rate == 1.0 else 0.0
+        }
+    
+    def _check_exact_match(
+        self,
+        ground_truth: List[Dict[str, Any]],
+        final_tool_calls: List[Dict[str, Any]]
+    ) -> bool:
+        """Check if there's an exact match between ground truth and final tool calls."""
+        if len(ground_truth) != len(final_tool_calls):
+            return False
+            
+        # Check each tool call
+        for gt_tc in ground_truth:
+            gt_tool_name = gt_tc.get("tool_name")
+            gt_params = gt_tc.get("parameters", {})
+            
+            # Find matching tool call
+            matching_tc = None
+            for tc in final_tool_calls:
+                if tc.get("tool_name") == gt_tool_name:
+                    matching_tc = tc
+                    break
+            
+            if not matching_tc:
+                return False
+                
+            # Compare parameters
+            actual_params = matching_tc.get("parameters", {})
+            
+            # Check for missing or extra parameters
+            if set(gt_params.keys()) != set(actual_params.keys()):
+                return False
+                
+            # Check parameter values
+            for param_name, gt_value in gt_params.items():
+                if param_name not in actual_params or actual_params[param_name] != gt_value:
+                    return False
+        
+        return True
     
     def _calculate_conversation_metrics(
         self,
         conversation: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Calculate metrics for the conversation.
+        Calculate metrics for the conversation - excluding automated messages.
         
         Args:
             conversation: List of conversation turns
@@ -170,20 +224,25 @@ class SimulationEvaluator:
         """
         metrics = {}
         
-        # Count total turns
-        metrics["total_turns"] = len(conversation)
+        # Only count human-relevant turns - exclude execution and confirmation messages
+        human_relevant_turns = []
+        for turn in conversation:
+            if turn.get("type") not in ["execution", "execution_result", "confirmation", "execution_retry", "execution_error"]:
+                human_relevant_turns.append(turn)
+        
+        metrics["total_turns"] = len(human_relevant_turns)
         
         # Count user turns
-        user_turns = [turn for turn in conversation if turn.get("role") == "user"]
+        user_turns = [turn for turn in human_relevant_turns if turn.get("role") == "user"]
         metrics["user_turns"] = len(user_turns)
         
-        # Count agent turns
-        agent_turns = [turn for turn in conversation if turn.get("role") == "agent"]
+        # Count agent turns (excluding automated)
+        agent_turns = [turn for turn in human_relevant_turns if turn.get("role") == "agent"]
         metrics["agent_turns"] = len(agent_turns)
         
         # Count clarification questions
         clarification_turns = [
-            turn for turn in conversation 
+            turn for turn in human_relevant_turns 
             if turn.get("role") == "agent" and turn.get("type") == "clarification"
         ]
         metrics["clarification_questions"] = len(clarification_turns)
@@ -349,34 +408,41 @@ class SimulationVisualizer:
         Returns:
             Formatted metrics string
         """
-        success = metrics.get("success", False)
-        tool_match_rate = metrics.get("tool_match_rate", 0.0)
-        tools_fully_matched_rate = metrics.get("tools_fully_matched_rate", 0.0)
-        param_match_rate = metrics.get("param_match_rate", 0.0)
-        conversation_metrics = metrics.get("conversation", {})
-        question_metrics = metrics.get("questions", {})
-        num_questions = metrics.get("num_questions", 0)
+        validity = metrics.get("validity", {})
+        correctness = metrics.get("correctness", {})
+        conversation = metrics.get("conversation", {})
+        questions = metrics.get("questions", {})
         
         lines = ["Evaluation Metrics:"]
         
-        # Success metrics
-        lines.append(f"\nSuccess (exact match): {'Yes' if success else 'No'}")
-        lines.append(f"Tool Match Rate: {tool_match_rate:.2f}")
-        lines.append(f"Tools Fully Matched: {'Yes' if tools_fully_matched_rate == 1.0 else 'No'}")
-        lines.append(f"Parameter Match Rate: {param_match_rate:.2f}")
+        # Validity metrics
+        lines.append("\nValidity Metrics:")
+        lines.append(f"- Total Tool Calls: {validity.get('total_tool_calls', 0)}")
+        lines.append(f"- Valid Tool Calls: {validity.get('valid_tool_calls', 0)}")
+        lines.append(f"- Validity Rate: {validity.get('validity_rate', 0.0):.2f}")
+        lines.append(f"- All Valid: {'Yes' if validity.get('all_valid', False) else 'No'}")
+        
+        # Correctness metrics
+        lines.append("\nCorrectness Metrics:")
+        lines.append(f"- Exact Match: {'Yes' if correctness.get('exact_match', False) else 'No'}")
+        lines.append(f"- Tool Match Rate: {correctness.get('tool_match_rate', 0.0):.2f}")
+        lines.append(f"- Parameter Match Rate: {correctness.get('param_match_rate', 0.0):.2f}")
+        
+        # Overall success
+        lines.append(f"\nOverall Success: {'Yes' if metrics.get('success', False) else 'No'}")
         
         # Conversation metrics
         lines.append(f"\nConversation Metrics:")
-        lines.append(f"- Total Turns: {conversation_metrics.get('total_turns', 0)}")
-        lines.append(f"- User Turns: {conversation_metrics.get('user_turns', 0)}")
-        lines.append(f"- Agent Turns: {conversation_metrics.get('agent_turns', 0)}")
-        lines.append(f"- Clarification Questions: {conversation_metrics.get('clarification_questions', 0)}")
+        lines.append(f"- Total Turns (Human-Relevant): {conversation.get('total_turns', 0)}")
+        lines.append(f"- User Turns: {conversation.get('user_turns', 0)}")
+        lines.append(f"- Agent Turns: {conversation.get('agent_turns', 0)}")
+        lines.append(f"- Clarification Questions: {conversation.get('clarification_questions', 0)}")
         
         # Question metrics
         lines.append(f"\nQuestion Metrics:")
-        lines.append(f"- Total Questions: {num_questions}")
-        lines.append(f"- Average EVPI: {question_metrics.get('average_evpi', 0.0):.4f}")
-        lines.append(f"- Average Regret Reduction: {question_metrics.get('average_regret_reduction', 0.0):.4f}")
-        lines.append(f"- Average UCB Score: {question_metrics.get('average_ucb_score', 0.0):.4f}")
+        lines.append(f"- Total Questions: {questions.get('total', 0)}")
+        lines.append(f"- Average EVPI: {questions.get('average_evpi', 0.0):.4f}")
+        lines.append(f"- Average Regret Reduction: {questions.get('average_regret_reduction', 0.0):.4f}")
+        lines.append(f"- Average UCB Score: {questions.get('average_ucb_score', 0.0):.4f}")
         
         return "\n".join(lines)

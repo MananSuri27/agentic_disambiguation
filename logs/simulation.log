@@ -811,3 +811,39 @@
 2025-04-27 00:16:32,167 - agentic_disambiguation - INFO - Executing tool calls
 2025-04-27 00:16:32,180 - agentic_disambiguation - INFO - Saved result to simulation_results_test/result_4dd1e646-8e15-4489-ae95-bc54e77bbf7f.json
 2025-04-27 00:16:32,202 - agentic_disambiguation - INFO - Saved summary to simulation_results_test/summary.json
+2025-04-27 17:48:14,863 - agentic_disambiguation - INFO - Running simulation for sample_data/doc_2_61_aug.json
+2025-04-27 17:48:14,866 - agentic_disambiguation - INFO - Generating initial tool calls for: Can you redact all mentions of the new drug's name upto page 7 without overwriting the original file and then add the password "Secure123"?
+2025-04-27 17:48:17,813 - agentic_disambiguation - INFO - Initial overall certainty: 0.001
+2025-04-27 17:48:17,813 - agentic_disambiguation - INFO - Turn 1 of 10
+2025-04-27 17:48:17,814 - agentic_disambiguation - INFO - Current overall certainty: 0.001
+2025-04-27 17:48:19,835 - agentic_disambiguation - INFO - Asking clarification question: Could you please specify the name of the new drug that needs to be redacted from the document?
+2025-04-27 17:48:20,987 - agentic_disambiguation - INFO - User response: The name of the new drug that I need redacted is "Ha23-X." Could you help with that on pages one through seven, and make sure it’s saved as a new file? Thank you!
+2025-04-27 17:48:22,601 - agentic_disambiguation - INFO - Turn 2 of 10
+2025-04-27 17:48:22,601 - agentic_disambiguation - INFO - Current overall certainty: 1.0
+2025-04-27 17:48:22,601 - agentic_disambiguation - INFO - Certainty is high enough (1.0000 > 0.9), proceeding to execution
+2025-04-27 17:48:22,603 - agentic_disambiguation - INFO - Executing tool calls
+2025-04-27 17:48:25,968 - agentic_disambiguation - INFO - Generated error clarification question: Could you please provide a name for the output file where the redacted document should be saved?
+2025-04-27 17:48:26,717 - agentic_disambiguation - INFO - User response to error: Sure, please save the redacted version as "redacted_document.pdf."
+2025-04-27 17:48:28,734 - agentic_disambiguation - INFO - Executing updated tool calls after error
+2025-04-27 17:48:28,742 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_2_61_aug_RESULT.json
+2025-04-27 17:48:28,742 - agentic_disambiguation - INFO - Running simulation for sample_data/doc_1_31_aug.json
+2025-04-27 17:48:28,745 - agentic_disambiguation - INFO - Generating initial tool calls for: Can you underline the text 'create' from pages 2 to 15 of the document and save it as "underlined_lists_document.pdf"?
+2025-04-27 17:48:31,318 - agentic_disambiguation - INFO - Initial overall certainty: 1.0
+2025-04-27 17:48:31,318 - agentic_disambiguation - INFO - Turn 1 of 10
+2025-04-27 17:48:31,318 - agentic_disambiguation - INFO - Current overall certainty: 1.0
+2025-04-27 17:48:31,318 - agentic_disambiguation - INFO - Certainty is high enough (1.0000 > 0.9), proceeding to execution
+2025-04-27 17:48:31,318 - agentic_disambiguation - INFO - Executing tool calls
+2025-04-27 17:48:31,324 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_1_31_aug_RESULT.json
+2025-04-27 17:48:31,324 - agentic_disambiguation - INFO - Running simulation for sample_data/doc_1_6_aug.json
+2025-04-27 17:48:31,326 - agentic_disambiguation - INFO - Generating initial tool calls for: Can you rename a file for me?
+2025-04-27 17:48:35,926 - agentic_disambiguation - INFO - Initial overall certainty: 0.001
+2025-04-27 17:48:35,926 - agentic_disambiguation - INFO - Turn 1 of 10
+2025-04-27 17:48:35,926 - agentic_disambiguation - INFO - Current overall certainty: 0.001
+2025-04-27 17:48:37,422 - agentic_disambiguation - INFO - Asking clarification question: What would you like the new name of the file to be?
+2025-04-27 17:48:38,314 - agentic_disambiguation - INFO - User response: "I'd like to rename the file to 'ProjectOverview_2023'. It's important to keep everything organized, especially since it contains essential project details for this year."
+2025-04-27 17:48:39,513 - agentic_disambiguation - INFO - Turn 2 of 10
+2025-04-27 17:48:39,513 - agentic_disambiguation - INFO - Current overall certainty: 1.0
+2025-04-27 17:48:39,513 - agentic_disambiguation - INFO - Certainty is high enough (1.0000 > 0.9), proceeding to execution
+2025-04-27 17:48:39,513 - agentic_disambiguation - INFO - Executing tool calls
+2025-04-27 17:48:39,520 - agentic_disambiguation - INFO - Saved result to simulation_results_test/doc_1_6_aug_RESULT.json
+2025-04-27 17:48:39,525 - agentic_disambiguation - INFO - Saved summary to simulation_results_test/summary.json

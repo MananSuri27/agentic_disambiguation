@@ -70,6 +70,8 @@ class ToolExecutor:
     def validate_tool_call(self, tool_call: ToolCall) -> Tuple[bool, Optional[str]]:
         """
         Validate a tool call before execution.
+        This checks if the tool call is executable (has all required parameters),
+        NOT if the parameters are correct against ground truth.
         
         Args:
             tool_call: Tool call to validate
@@ -83,16 +85,77 @@ class ToolExecutor:
         
         # Check required arguments
         for arg in tool.arguments:
-            if arg.required and (arg.name not in tool_call.arguments or tool_call.arguments[arg.name] == "<UNK>"):
+            if arg.required and arg.name not in tool_call.arguments:
                 return False, f"Missing required argument: {arg.name}"
             
-            # If the argument is provided, validate its value
-            if arg.name in tool_call.arguments and tool_call.arguments[arg.name] != "<UNK>":
+            # If the argument is provided, validate its domain
+            if arg.name in tool_call.arguments:
                 value = tool_call.arguments[arg.name]
-                if not arg.domain.is_valid(value):
+                
+                # Skip validation for <UNK> values
+                if value == "<UNK>":
+                    if arg.required:
+                        return False, f"Required argument {arg.name} has unknown value"
+                    else:
+                        # Optional argument with unknown value is acceptable
+                        continue
+                
+                # Validate based on domain type
+                if not self._validate_argument_by_domain(arg, value):
                     return False, f"Invalid value for argument {arg.name}: {value}"
         
         return True, None
+    
+    def _validate_argument_by_domain(self, arg, value) -> bool:
+        """
+        Validate an argument value based on its domain type.
+        
+        Args:
+            arg: The argument definition
+            value: The value to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        domain = arg.domain
+        
+        # Handle different domain types
+        if domain.domain_type.value == "finite":
+            # For finite domains, value must be in the allowed set
+            return value in domain.values
+        
+        elif domain.domain_type.value == "numeric_range":
+            # For numeric ranges, value must be within range
+            try:
+                val = float(value)
+                start, end = domain.values
+                return start <= val <= end
+            except (ValueError, TypeError):
+                return False
+        
+        elif domain.domain_type.value == "boolean":
+            # For booleans, must be bool type or convertible
+            return isinstance(value, bool) or value in ['true', 'false', 'True', 'False', True, False]
+        
+        elif domain.domain_type.value == "string":
+            # For strings, any non-empty string is valid
+            return isinstance(value, str) and value != ""
+        
+        elif domain.domain_type.value == "list":
+            # For lists, must be a list and each element must be valid
+            if not isinstance(value, list):
+                return False
+            # If there's an element domain defined, validate each element
+            if hasattr(domain, 'element_domain'):
+                element_domain = domain.element_domain
+                return all(self._validate_argument_by_domain(
+                    type('dummy_arg', (), {'domain': element_domain}), 
+                    elem
+                ) for elem in value)
+            return True
+        
+        # Default case for unknown domain types
+        return True
     
     def execute_tool_call(self, tool_call: ToolCall) -> ToolExecutionResult:
         """
@@ -104,18 +167,21 @@ class ToolExecutor:
         Returns:
             Execution result
         """
-        # Validate the tool call
-        # is_valid, error = self.validate_tool_call(tool_call)
-        # if not is_valid:
-        #     return ToolExecutionResult(
-        #         tool_name=tool_call.tool_name,
-        #         success=False,
-        #         message=f"Validation failed: {error}",
-        #         error=error
-        #     )
+        # Validate the tool call for executability
+        is_valid, error = self.validate_tool_call(tool_call)
+        if not is_valid:
+            return ToolExecutionResult(
+                tool_name=tool_call.tool_name,
+                success=False,
+                message=f"Validation failed: {error}",
+                error=error
+            )
         
-        # Prepare parameters for execution
-        parameters = tool_call.to_execution_dict()["parameters"]
+        # Prepare parameters for execution (filter out <UNK> values)
+        parameters = {
+            k: v for k, v in tool_call.arguments.items() 
+            if v != "<UNK>"
+        }
         
         try:
             # Execute the tool call via mock API
@@ -150,7 +216,6 @@ class ToolExecutor:
             )
     
     def execute_tool_calls(self, tool_calls: List[ToolCall]) -> List[ToolExecutionResult]:
-
         """
         Execute a sequence of tool calls.
         
@@ -172,7 +237,6 @@ class ToolExecutor:
         
         return results
     
-
     def generate_error_clarification(
         self, 
         error_result: ToolExecutionResult, 

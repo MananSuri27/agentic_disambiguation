@@ -61,7 +61,7 @@ def initialize_tool_registry(tool_configs: List[Dict[str, Any]]) -> ToolRegistry
             arg_description = arg_config.get("description", "")
             required = arg_config.get("required", True)
             default = arg_config.get("default", None)
-            
+
             # Create domain
             domain_config = arg_config.get("domain", {})
             domain_type_str = domain_config.get("type", "string")
@@ -121,6 +121,25 @@ def initialize_llm_provider(llm_config: Dict[str, Any]) -> LLMProvider:
     else:
         # Default to Ollama
         return OllamaProvider()
+
+def generate_output_filename(input_filename: str) -> str:
+    """
+    Generate output filename by appending _RESULT to the input filename.
+    
+    Args:
+        input_filename: Original input filename
+        
+    Returns:
+        Output filename
+    """
+    # Extract the filename without extension and the extension
+    base = os.path.basename(input_filename)
+    name, ext = os.path.splitext(base)
+    
+    # Create new filename with _RESULT suffix
+    output_filename = f"{name}_RESULT{ext}"
+    
+    return output_filename
 
 def run_simulation(
     simulation_data: Dict[str, Any],
@@ -410,19 +429,6 @@ def run_simulation(
                     "type": "execution_error"
                 })
     
-    # # Prepare simulation result
-    # result = {
-    #     "simulation_id": str(uuid.uuid4()),
-    #     "user_query": user_query,
-    #     "initial_tool_calls": [tc.to_dict() for tc in tool_calls],
-    #     "final_tool_calls": [tc.to_execution_dict() for tc in tool_calls],
-    #     "execution_results": [result.to_dict() for result in execution_results],
-    #     "conversation": conversation,
-    #     "questions": question_metrics,
-    #     "turns": turn_count,
-    #     "success": all_succeeded,
-    # }
-
     # Prepare simulation result
     result = {
         "simulation_id": str(uuid.uuid4()),
@@ -503,9 +509,12 @@ def main():
         results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
         os.makedirs(results_dir, exist_ok=True)
         
-        output_path = args.output if args.output else os.path.join(
-            results_dir, f"result_{result['simulation_id']}.json"
-        )
+        if args.output:
+            output_path = args.output
+        else:
+            # Generate output filename based on input filename
+            output_filename = generate_output_filename(args.data)
+            output_path = os.path.join(results_dir, output_filename)
         
         # Add evaluation metrics before saving
         evaluator = SimulationEvaluator()
@@ -553,9 +562,9 @@ def main():
             results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
             os.makedirs(results_dir, exist_ok=True)
             
-            output_path = os.path.join(
-                results_dir, f"result_{result['simulation_id']}.json"
-            )
+            # Generate output filename based on input filename
+            output_filename = generate_output_filename(file_path)
+            output_path = os.path.join(results_dir, output_filename)
             
             save_json(result, output_path, pretty=True)
             logger.info(f"Saved result to {output_path}")
@@ -569,9 +578,10 @@ def main():
                 "total_simulations": len(results),
                 "successful_simulations": sum(1 for r in results if r.get("success", False)),
                 "success_rate": sum(1 for r in results if r.get("success", False)) / len(results),
-                "average_tool_match_rate": sum(r.get("evaluation", {}).get("tool_match_rate", 0.0) for r in results) / len(results),
-                "tools_fully_matched_rate": sum(1 for r in results if r.get("evaluation", {}).get("tools_fully_matched_rate", 0.0) == 1.0) / len(results),
-                "average_param_match_rate": sum(r.get("evaluation", {}).get("param_match_rate", 0.0) for r in results) / len(results),
+                "average_validity_rate": sum(r.get("evaluation", {}).get("validity", {}).get("validity_rate", 0.0) for r in results) / len(results),
+                "average_tool_match_rate": sum(r.get("evaluation", {}).get("correctness", {}).get("tool_match_rate", 0.0) for r in results) / len(results),
+                "tools_fully_matched_rate": sum(1 for r in results if r.get("evaluation", {}).get("correctness", {}).get("tools_fully_matched_rate", 0.0) == 1.0) / len(results),
+                "average_param_match_rate": sum(r.get("evaluation", {}).get("correctness", {}).get("param_match_rate", 0.0) for r in results) / len(results),
                 "average_turns": sum(r.get("turns", 0) for r in results) / len(results),
                 "average_questions": sum(r.get("evaluation", {}).get("num_questions", 0) for r in results) / len(results),
                 "simulation_ids": [r.get("simulation_id") for r in results]
@@ -592,6 +602,7 @@ def main():
                 print(f"Total simulations: {summary['total_simulations']}")
                 print(f"Successful simulations: {summary['successful_simulations']}")
                 print(f"Success rate: {summary['success_rate']:.2f}")
+                print(f"Average validity rate: {summary['average_validity_rate']:.2f}")
                 print(f"Average tool match rate: {summary['average_tool_match_rate']:.2f}")
                 print(f"Tools fully matched rate: {summary['tools_fully_matched_rate']:.2f}")
                 print(f"Average parameter match rate: {summary['average_param_match_rate']:.2f}")
