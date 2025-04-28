@@ -82,7 +82,7 @@ class SimulationEvaluator:
         for tc in final_tool_calls:
             # Check if tool has all required parameters (not <UNK>)
             is_valid = True
-            arguments = tc.get("arguments", {})
+            arguments = tc.get("arguments", tc.get("parameters", {}))
             
             # For this simulation, we consider a tool call valid if it doesn't have <UNK> values
             for param, value in arguments.items():
@@ -237,7 +237,7 @@ class SimulationEvaluator:
                     break
             
             if matching_tc:
-                actual_params = matching_tc.get("arguments", {})
+                actual_params = matching_tc.get("arguments", matching_tc.get("parameters", {}))
                 
                 # Count parameters
                 for param_name, gt_value in gt_params.items():
