@@ -413,8 +413,7 @@ Return your response as a JSON object with the updated tool calls:
                     # This is a new tool call
                     new_tc = ToolCall(tool_name, arguments)
                     updated_tool_calls.append(new_tc)
-            print("*"*25)
-            print(user_response, updated_tool_calls)
+
             
             # If no tool calls were returned, keep the original ones
             if not updated_tool_calls:
