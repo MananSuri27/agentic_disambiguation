@@ -1,7 +1,8 @@
 from typing import Dict, List, Any, Tuple, Optional
 import logging
-from .tool_registry import ToolRegistry
-from .uncertainty import ToolCall
+from core.tool_registry import ToolRegistry
+from core.uncertainty import ToolCall
+from core.plugin_manager import PluginManager
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +56,17 @@ class ToolExecutor:
     def __init__(
         self,
         tool_registry: ToolRegistry,
-        mock_api_client
+        plugin_manager: PluginManager
     ):
         """
         Initialize a tool executor.
         
         Args:
             tool_registry: Registry of available tools
-            mock_api_client: Client for mock API execution
+            plugin_manager: Manager for API plugins
         """
         self.tool_registry = tool_registry
-        self.mock_api_client = mock_api_client
+        self.plugin_manager = plugin_manager
     
     def validate_tool_call(self, tool_call: ToolCall) -> Tuple[bool, Optional[str]]:
         """
@@ -82,23 +83,22 @@ class ToolExecutor:
         tool = self.tool_registry.get_tool(tool_call.tool_name)
         if not tool:
             return False, f"Unknown tool: {tool_call.tool_name}"
+            
+        # Get the plugin for this tool to use its validation logic
+        plugin = self.plugin_manager.get_plugin_for_tool(tool_call.tool_name)
+        if plugin:
+            # Use plugin-specific validation if available
+            return plugin.validate_tool_call(tool_call.tool_name, tool_call.arguments)
         
+        # Fall back to generic validation using the tool registry
         # Check required arguments
         for arg in tool.arguments:
-            if arg.required and arg.name not in tool_call.arguments:
+            if arg.required and (arg.name not in tool_call.arguments or tool_call.arguments[arg.name] == "<UNK>"):
                 return False, f"Missing required argument: {arg.name}"
             
             # If the argument is provided, validate its domain
-            if arg.name in tool_call.arguments:
+            if arg.name in tool_call.arguments and tool_call.arguments[arg.name] != "<UNK>":
                 value = tool_call.arguments[arg.name]
-                
-                # Skip validation for <UNK> values
-                if value == "<UNK>":
-                    if arg.required:
-                        return False, f"Required argument {arg.name} has unknown value"
-                    else:
-                        # Optional argument with unknown value is acceptable
-                        continue
                 
                 # Validate based on domain type
                 if not self._validate_argument_by_domain(arg, value):
@@ -177,6 +177,16 @@ class ToolExecutor:
                 error=error
             )
         
+        # Get the plugin for this tool
+        plugin = self.plugin_manager.get_plugin_for_tool(tool_call.tool_name)
+        if not plugin:
+            return ToolExecutionResult(
+                tool_name=tool_call.tool_name,
+                success=False,
+                message=f"No plugin found for tool: {tool_call.tool_name}",
+                error="PLUGIN_NOT_FOUND"
+            )
+        
         # Prepare parameters for execution (filter out <UNK> values)
         parameters = {
             k: v for k, v in tool_call.arguments.items() 
@@ -184,8 +194,8 @@ class ToolExecutor:
         }
         
         try:
-            # Execute the tool call via mock API
-            result = self.mock_api_client.execute_tool(
+            # Execute the tool call via the plugin
+            result = plugin.execute_tool(
                 tool_name=tool_call.tool_name,
                 parameters=parameters
             )

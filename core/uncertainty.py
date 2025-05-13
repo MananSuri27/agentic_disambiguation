@@ -2,7 +2,8 @@ from typing import Dict, List, Any, Tuple, Optional
 import copy
 import math
 import logging
-from .tool_registry import Tool, ToolRegistry, DomainType
+from core.tool_registry import Tool, ToolRegistry, DomainType
+from core.plugin_manager import PluginManager
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +85,23 @@ class ToolCall:
 class UncertaintyCalculator:
     """Class for calculating uncertainty in tool calls."""
     
-    def __init__(self, tool_registry: ToolRegistry):
+    def __init__(self, tool_registry: ToolRegistry, plugin_manager: PluginManager):
         """
         Initialize an uncertainty calculator.
         
         Args:
             tool_registry: Registry of available tools
+            plugin_manager: Manager for API plugins
         """
         self.tool_registry = tool_registry
+        self.plugin_manager = plugin_manager
     
     def calculate_arg_certainty(
         self,
         tool: Tool,
         arg_name: str,
-        arg_value: Any
+        arg_value: Any,
+        uncertainty_context: Dict[str, Any] = {}
     ) -> float:
         """
         Calculate certainty for a single argument.
@@ -106,12 +110,13 @@ class UncertaintyCalculator:
             tool: Tool the argument belongs to
             arg_name: Name of the argument
             arg_value: Current value of the argument
+            uncertainty_context: Plugin-specific context for uncertainty calculation
             
         Returns:
             Certainty probability (0-1)
         """
         # Unknown value has low certainty
-        if arg_value == "<UNK>" or (isinstance(arg_value ,(list, tuple, dict, set)) and "<UNK>" in arg_value):
+        if arg_value == "<UNK>" or (isinstance(arg_value, (list, tuple, dict, set)) and "<UNK>" in arg_value):
             arg = tool.get_argument(arg_name)
             if not arg:
                 logger.warning(f"Unknown argument {arg_name} for tool {tool.name}")
@@ -148,6 +153,14 @@ class UncertaintyCalculator:
             logger.warning(f"Unknown tool: {tool_call.tool_name}")
             return 0.0, {}
         
+        # Get the plugin for this tool to access domain-specific certainty logic
+        plugin = self.plugin_manager.get_plugin_for_tool(tool_call.tool_name)
+        
+        # Get plugin-specific uncertainty context
+        uncertainty_context = {}
+        if plugin:
+            uncertainty_context = plugin.get_uncertainty_context()
+        
         arg_certainties = {}
         overall_certainty = 1.0
         
@@ -156,8 +169,7 @@ class UncertaintyCalculator:
             arg_name = arg.name
             arg_value = tool_call.arguments.get(arg_name, "<UNK>")
             
-            
-            certainty = self.calculate_arg_certainty(tool, arg_name, arg_value)
+            certainty = self.calculate_arg_certainty(tool, arg_name, arg_value, uncertainty_context)
             arg_certainties[arg_name] = certainty
             
             # Update the argument state in the tool call
@@ -249,23 +261,14 @@ class UncertaintyCalculator:
             EVPI value
         """
         # Calculate current probability
-
-        print(tool_calls)
         current_prob, _ = self.calculate_sequence_certainty(tool_calls)
         
         # Create a copy of tool calls to simulate perfect information
         tool_calls_copy = copy.deepcopy(tool_calls)
-        # for tc in tool_calls:
-        #     tc_copy = copy.deepcopy(tc)
-        #     # tc_copy.arg_states = {k: ArgumentState(
-        #     #     v.tool_name, v.arg_name, v.value, v.certainty
-        #     # ) for k, v in tc.arg_states.items()}
-        #     tool_calls_copy.append(tc_copy)
         
         # For each argument that would be resolved, set certainty to 1.0
         for question_id, arg_list in question_args.items():
             for arg_tuple in arg_list:
-                print(arg_tuple)
                 if len(arg_tuple) == 2:  # Ensure the tuple has the expected format
                     tool_name, arg_name = arg_tuple
                     for tc in tool_calls_copy:
@@ -273,13 +276,8 @@ class UncertaintyCalculator:
                             tc.arg_states[arg_name].certainty = 1.0
                             tc.arguments[arg_name] = 'KNOWN'
         
-        print(tool_calls)
-        print(tool_calls_copy)
-        
         # Calculate new probability
         new_prob, _ = self.calculate_sequence_certainty(tool_calls_copy)
-
-        print(current_prob, new_prob)
         
         # EVPI is the difference in probabilities
         return new_prob - current_prob
@@ -330,7 +328,7 @@ class UncertaintyCalculator:
         self,
         evpi: float,
         regret_reduction: float,
-        arg_clarification_counts: Dict[Tuple[str, str], int],
+        arg_clarification_counts: Dict[str, int],
         target_args: List[Tuple[str, str]],
         total_clarifications: int,
         c: float = 1.0
@@ -343,7 +341,7 @@ class UncertaintyCalculator:
         Args:
             evpi: EVPI value for the question
             regret_reduction: Regret reduction value for the question
-            arg_clarification_counts: Dictionary mapping (tool_name, arg_name) to count of clarifications
+            arg_clarification_counts: Dictionary mapping "tool_name.arg_name" to count of clarifications
             target_args: List of (tool_name, arg_name) tuples targeted by this question
             total_clarifications: Total number of clarification attempts made so far
             c: Exploration constant
@@ -357,10 +355,11 @@ class UncertaintyCalculator:
         else:
             total_arg_counts = 0
             for arg_tuple in target_args:
-                print(arg_clarification_counts)
-                print(arg_tuple)
-                total_arg_counts += arg_clarification_counts.get(".".join(arg_tuple), 0)
-            n_k = total_arg_counts / len(target_args)
+                if len(arg_tuple) == 2:
+                    tool_name, arg_name = arg_tuple
+                    key = f"{tool_name}.{arg_name}"
+                    total_arg_counts += arg_clarification_counts.get(key, 0)
+            n_k = total_arg_counts / len(target_args) if target_args else 0
         
         # Calculate exploration term
         exploration = c * math.sqrt(math.log(total_clarifications + 1) / (n_k + 1))

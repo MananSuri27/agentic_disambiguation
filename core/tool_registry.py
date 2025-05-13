@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Dict, List, Union, Any, Optional, Callable
 import logging
+import copy
+from core.plugin_manager import PluginManager
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,6 @@ class ArgumentDomain:
     
     def is_valid(self, value: Any) -> bool:
         """Check if a value is valid for this domain."""
-
         if self.validator:
             return self.validator(value)
             
@@ -69,7 +70,7 @@ class ArgumentDomain:
             start, end = self.values
             return isinstance(value, (int, float)) and start <= value <= end
         elif self.domain_type == DomainType.BOOLEAN:
-            return isinstance(value, bool)
+            return isinstance(value, bool) or value in ['true', 'false', 'True', 'False', True, False]
         elif self.domain_type == DomainType.LIST:
             # For lists, each element should be valid according to the element domain
             if not isinstance(value, list):
@@ -98,7 +99,7 @@ class ArgumentDomain:
             domain_dict["element_domain"] = self.values.to_dict()
             
         return domain_dict
-
+    
     def __str__(self) -> str:
         """String representation of the domain."""
         if self.domain_type == DomainType.FINITE:
@@ -192,16 +193,97 @@ class Tool:
 
 
 class ToolRegistry:
-    """Registry for tools in the system."""
+    """Registry for tools in the system, now plugin-aware."""
     
-    def __init__(self):
-        """Initialize an empty tool registry."""
+    def __init__(self, plugin_manager: PluginManager):
+        """
+        Initialize a tool registry.
+        
+        Args:
+            plugin_manager: Manager for API plugins
+        """
+        self.plugin_manager = plugin_manager
         self.tools: Dict[str, Tool] = {}
+        self.rebuild_registry()
+    
+    def rebuild_registry(self) -> None:
+        """Rebuild the tool registry from plugins."""
+        # Get all tools from all plugins
+        all_tools = self.plugin_manager.get_all_tools()
+        
+        # Convert to internal tool representation
+        self.tools = {}
+        for tool_dict in all_tools:
+            tool = self._convert_dict_to_tool(tool_dict)
+            self.tools[tool.name] = tool
+            
+        logger.info(f"Rebuilt tool registry with {len(self.tools)} tools")
     
     def register_tool(self, tool: Tool) -> None:
-        """Register a tool in the registry."""
+        """
+        Register a tool in the registry.
+        
+        Args:
+            tool: Tool to register
+        """
         self.tools[tool.name] = tool
         logger.info(f"Registered tool: {tool.name}")
+    
+    def _convert_dict_to_tool(self, tool_dict: Dict[str, Any]) -> Tool:
+        """Convert a tool dictionary to a Tool object."""
+        name = tool_dict.get("name", "")
+        description = tool_dict.get("description", "")
+        
+        # Create arguments
+        arguments = []
+        for arg_dict in tool_dict.get("arguments", []):
+            arg_name = arg_dict.get("name", "")
+            arg_description = arg_dict.get("description", "")
+            required = arg_dict.get("required", True)
+            default = arg_dict.get("default", None)
+            
+            # Create domain
+            domain_dict = arg_dict.get("domain", {})
+            domain_type_str = domain_dict.get("type", "string")
+            
+            # Convert string to enum
+            try:
+                domain_type = DomainType(domain_type_str)
+            except ValueError:
+                logger.warning(f"Unknown domain type: {domain_type_str}, defaulting to STRING")
+                domain_type = DomainType.STRING
+                
+            domain_values = domain_dict.get("values", None)
+            importance = domain_dict.get("importance", 0.5)
+            data_dependent = domain_dict.get("data_dependent", False)
+            
+            domain = ArgumentDomain(
+                domain_type=domain_type,
+                values=domain_values,
+                importance=importance,
+                description=arg_description,
+                data_dependent=data_dependent
+            )
+            
+            # Create argument
+            argument = Argument(
+                name=arg_name,
+                domain=domain,
+                description=arg_description,
+                required=required,
+                default=default
+            )
+            
+            arguments.append(argument)
+            
+        # Create tool
+        tool = Tool(
+            name=name,
+            description=description,
+            arguments=arguments
+        )
+        
+        return tool
     
     def get_tool(self, name: str) -> Optional[Tool]:
         """Get a tool by name."""
@@ -221,9 +303,10 @@ class ToolRegistry:
             for arg in tool.arguments:
                 arg_desc = f"  - {arg.name}: "
                 if arg.description:
-                    arg_desc += f" - {arg.description}"
+                    arg_desc += f"{arg.description}"
                 if not arg.required:
                     arg_desc += f" (Optional, default: {arg.default})"
+                arg_desc += f" - {str(arg.domain)}"
                 tool_desc += f"\n{arg_desc}"
             
             descriptions.append(tool_desc)
@@ -235,13 +318,26 @@ class ToolRegistry:
         Update data-dependent domains based on the provided context.
         
         Args:
-            data_context: Dictionary of context data (e.g., {"number_of_pages": 10})
+            data_context: Dictionary of context data
         """
-        for tool in self.tools.values():
-            for arg in tool.arguments:
-                if arg.domain.data_dependent:
-                    if arg.name == "page_num" and "number_of_pages" in data_context:
-                        arg.domain.values = (1, data_context["number_of_pages"])
-                    elif arg.name in ["start", "end"] and "number_of_pages" in data_context:
-                        arg.domain.values = (1, data_context["number_of_pages"])
-                    # Add more data-dependent domain updates as needed
+        # First, ask each plugin for domain updates
+        all_updates = {}
+        for plugin_name, plugin in self.plugin_manager.plugins.items():
+            plugin_updates = plugin.get_domain_updates_from_context(data_context)
+            all_updates.update(plugin_updates)
+            
+        # Apply updates to tool arguments
+        for update_key, domain_update in all_updates.items():
+            try:
+                tool_name, arg_name = update_key.split(".")
+                tool = self.get_tool(tool_name)
+                
+                if tool:
+                    arg = tool.get_argument(arg_name)
+                    if arg:
+                        # Update the domain values
+                        if domain_update.get("type") == "numeric_range":
+                            arg.domain.values = domain_update.get("values")
+                        # Add other domain type updates as needed
+            except Exception as e:
+                logger.error(f"Error updating domain for {update_key}: {e}")

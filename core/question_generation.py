@@ -2,6 +2,7 @@ from typing import Dict, List, Tuple, Any, Optional
 import logging
 from core.tool_registry import ToolRegistry
 from core.uncertainty import ToolCall, UncertaintyCalculator
+from core.plugin_manager import PluginManager
 from llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,8 @@ class QuestionGenerator:
         self, 
         llm_provider: LLMProvider,
         tool_registry: ToolRegistry,
-        uncertainty_calculator: UncertaintyCalculator
+        uncertainty_calculator: UncertaintyCalculator,
+        plugin_manager: PluginManager
     ):
         """
         Initialize a question generator.
@@ -63,13 +65,15 @@ class QuestionGenerator:
             llm_provider: Provider for LLM interactions
             tool_registry: Registry of available tools
             uncertainty_calculator: Calculator for uncertainty metrics
+            plugin_manager: Manager for API plugins
         """
         self.llm = llm_provider
         self.tool_registry = tool_registry
         self.uncertainty_calculator = uncertainty_calculator
+        self.plugin_manager = plugin_manager
         
         # Counter for how many times each argument has been clarified
-        self.arg_clarification_counts: Dict[Tuple[str, str], int] = {}
+        self.arg_clarification_counts: Dict[str, int] = {}
         self.total_clarifications = 0
         
         # Store all generated questions and their evaluations for analysis
@@ -178,7 +182,24 @@ class QuestionGenerator:
         Returns:
             Formatted prompt string
         """
-        prompt = f"""
+        # Get the first tool call to determine which plugin to use
+        if tool_calls:
+            first_tool = tool_calls[0].get("tool_name", "")
+            plugin = self.plugin_manager.get_plugin_for_tool(first_tool)
+            
+            if plugin:
+                # Use plugin-specific template if available
+                templates = plugin.get_prompt_templates()
+                if "question_generation" in templates:
+                    template = templates["question_generation"]
+                    return template.format(
+                        user_query=user_query,
+                        tool_calls=tool_calls,
+                        uncertain_args=uncertain_args
+                    )
+        
+        # Fall back to default template if no plugin-specific one is available
+        default_template = """
 You are an AI assistant that helps users by understanding their queries and executing tool calls.
 
 Original user query:
@@ -212,7 +233,11 @@ Return your response as a JSON object with the following structure:
 
 Ensure that each question targets at least one uncertain argument.
 """
-        return prompt
+        return default_template.format(
+            user_query=user_query,
+            tool_calls=tool_calls,
+            uncertain_args=uncertain_args
+        )
 
     def evaluate_questions(
         self,
@@ -321,8 +346,10 @@ Ensure that each question targets at least one uncertain argument.
             question: The question that was asked
         """
         for arg_tuple in question.target_args:
-            key = ".".join(arg_tuple)
-            self.arg_clarification_counts[key] = self.arg_clarification_counts.get(key, 0) + 1
+            if len(arg_tuple) == 2:
+                tool_name, arg_name = arg_tuple
+                key = f"{tool_name}.{arg_name}"
+                self.arg_clarification_counts[key] = self.arg_clarification_counts.get(key, 0) + 1
         self.total_clarifications += 1
     
     def process_user_response(
@@ -413,7 +440,6 @@ Return your response as a JSON object with the updated tool calls:
                     # This is a new tool call
                     new_tc = ToolCall(tool_name, arguments)
                     updated_tool_calls.append(new_tc)
-
             
             # If no tool calls were returned, keep the original ones
             if not updated_tool_calls:
