@@ -186,3 +186,43 @@ class PluginManager:
         for plugin_name, plugin in self.plugins.items():
             all_templates[plugin_name] = plugin.get_prompt_templates()
         return all_templates
+    
+    def format_template(
+        self, 
+        plugin_name: str, 
+        template_name: str, 
+        **kwargs
+    ) -> Optional[str]:
+        """
+        Format a prompt template from a specific plugin.
+        
+        Args:
+            plugin_name: Name of the plugin
+            template_name: Name of the template
+            **kwargs: Format arguments
+            
+        Returns:
+            Formatted template or None if not found
+        """
+        plugin = self.get_plugin(plugin_name)
+        if not plugin:
+            return None
+            
+        templates = plugin.get_prompt_templates()
+        if template_name not in templates:
+            return None
+            
+        # Get the template
+        template = templates[template_name]
+        
+        # Check if the template has a placeholder for conversation history
+        if "{conversation_history}" in template and "conversation_history" not in kwargs:
+            # Add empty conversation history if not provided
+            kwargs["conversation_history"] = ""
+            
+        # Format the template
+        try:
+            return template.format(**kwargs)
+        except Exception as e:
+            logger.error(f"Error formatting template {template_name} from plugin {plugin_name}: {e}")
+            return None

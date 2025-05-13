@@ -78,12 +78,14 @@ class QuestionGenerator:
         
         # Store all generated questions and their evaluations for analysis
         self.question_history: List[Dict[str, Any]] = []
-    
+
+
     def generate_candidate_questions(
         self,
         user_query: str,
         tool_calls: List[ToolCall],
-        max_questions: int = 5
+        max_questions: int = 5,
+        conversation_history: List[Dict[str, Any]] = None
     ) -> List[ClarificationQuestion]:
         """
         Generate candidate clarification questions.
@@ -92,6 +94,7 @@ class QuestionGenerator:
             user_query: Original user query
             tool_calls: Current tool calls with uncertainty
             max_questions: Maximum number of questions to generate
+            conversation_history: Optional conversation history
             
         Returns:
             List of clarification questions
@@ -127,7 +130,8 @@ class QuestionGenerator:
         prompt = self._create_question_generation_prompt(
             user_query=user_query,
             tool_calls=tool_calls_info,
-            uncertain_args=uncertain_args
+            uncertain_args=uncertain_args,
+            conversation_history=conversation_history
         )
         
         # Call LLM to generate questions
@@ -169,7 +173,8 @@ class QuestionGenerator:
         self,
         user_query: str,
         tool_calls: List[Dict],
-        uncertain_args: List[Dict]
+        uncertain_args: List[Dict],
+        conversation_history: List[Dict[str, Any]] = None
     ) -> str:
         """
         Create a prompt for question generation.
@@ -178,10 +183,22 @@ class QuestionGenerator:
             user_query: Original user query
             tool_calls: Current tool calls
             uncertain_args: List of uncertain arguments
+            conversation_history: Optional conversation history
             
         Returns:
             Formatted prompt string
         """
+        # Format conversation history if provided
+        formatted_history = ""
+        if conversation_history:
+            history_lines = []
+            for turn in conversation_history:
+                role = turn.get("role", "unknown")
+                message = turn.get("message", "")
+                history_lines.append(f"{role.capitalize()}: {message}")
+            formatted_history = "\n".join(history_lines)
+            formatted_history = f"Conversation history:\n{formatted_history}\n\n"
+            
         # Get the first tool call to determine which plugin to use
         if tool_calls:
             first_tool = tool_calls[0].get("tool_name", "")
@@ -192,17 +209,23 @@ class QuestionGenerator:
                 templates = plugin.get_prompt_templates()
                 if "question_generation" in templates:
                     template = templates["question_generation"]
+                    
+                    # If the template doesn't have a placeholder for conversation history, add it
+                    if "{conversation_history}" not in template:
+                        template = formatted_history + template
+                        
                     return template.format(
                         user_query=user_query,
                         tool_calls=tool_calls,
-                        uncertain_args=uncertain_args
+                        uncertain_args=uncertain_args,
+                        conversation_history=formatted_history
                     )
         
         # Fall back to default template if no plugin-specific one is available
         default_template = """
 You are an AI assistant that helps users by understanding their queries and executing tool calls.
 
-Original user query:
+{conversation_history}Original user query:
 "{user_query}"
 
 Based on the query, I've determined that the following tool calls are needed, but some arguments are uncertain:
@@ -233,6 +256,278 @@ Return your response as a JSON object with the following structure:
 
 Ensure that each question targets at least one uncertain argument.
 """
+        return default_template.format(
+            user_query=user_query,
+            tool_calls=tool_calls,
+            uncertain_args=uncertain_args,
+            conversation_history=formatted_history
+        )
+        
+    def process_user_response(
+        self,
+        question: ClarificationQuestion,
+        user_response: str,
+        tool_calls: List[ToolCall],
+        conversation_history: List[Dict[str, Any]] = None
+    ) -> List[ToolCall]:
+        """
+        Process user response to a clarification question.
+        
+        Args:
+            question: The question that was asked
+            user_response: User's response to the question
+            tool_calls: Current tool calls to update
+            conversation_history: Optional conversation history
+            
+        Returns:
+            Updated tool calls
+        """
+        # Format conversation history if provided
+        formatted_history = ""
+        if conversation_history:
+            history_lines = []
+            for turn in conversation_history:
+                role = turn.get("role", "unknown")
+                message = turn.get("message", "")
+                history_lines.append(f"{role.capitalize()}: {message}")
+            formatted_history = "\n".join(history_lines)
+            formatted_history = f"Conversation history:\n{formatted_history}\n\n"
+            
+        # Prepare context for the LLM
+        prompt = f"""
+You are an AI assistant that helps users by understanding their queries and executing tool calls.
+
+{formatted_history}A user was asked the following clarification question:
+"{question.question_text}"
+
+The user's response was:
+"{user_response}"
+
+This question was targeting the following arguments:
+{question.target_args}
+
+The current tool calls are:
+{[tc.to_dict() for tc in tool_calls]}
+
+Your task is to update the tool calls based on the user's response. Focus specifically on the target arguments.
+
+Return your response as a JSON object with the updated tool calls:
+{{
+  "updated_tool_calls": [
+    {{
+      "tool_name": "tool_name",
+      "arguments": {{
+        "arg1": "value1",
+        "arg2": "value2"
+      }}
+    }}
+  ]
+}}
+"""
+        
+        # Call LLM to update tool calls
+        updated_calls_json = self.llm.generate_json(
+            prompt=prompt,
+            response_model={
+                "updated_tool_calls": [
+                    {
+                        "tool_name": "string",
+                        "arguments": {}
+                    }
+                ]
+            },
+            max_tokens=2000
+        )
+        
+        # Process the results
+        if "updated_tool_calls" in updated_calls_json:
+            updated_tool_calls = []
+            
+            # Map original tool calls by tool name for reference
+            tool_call_map = {tc.tool_name: tc for tc in tool_calls}
+            
+            for updated_call_data in updated_calls_json["updated_tool_calls"]:
+                tool_name = updated_call_data.get("tool_name", "")
+                arguments = updated_call_data.get("arguments", {})
+                
+                # Check if this is updating an existing tool call
+                if tool_name in tool_call_map:
+                    # Update existing tool call
+                    original_tc = tool_call_map[tool_name]
+                    # Merge arguments, keeping original ones that weren't updated
+                    merged_args = original_tc.arguments.copy()
+                    merged_args.update(arguments)
+                    
+                    updated_tc = ToolCall(tool_name, merged_args)
+                    updated_tool_calls.append(updated_tc)
+                else:
+                    # This is a new tool call
+                    new_tc = ToolCall(tool_name, arguments)
+                    updated_tool_calls.append(new_tc)
+            
+            # If no tool calls were returned, keep the original ones
+            if not updated_tool_calls:
+                return tool_calls
+                
+            return updated_tool_calls
+        
+        # If something went wrong, return the original tool calls
+        return tool_calls  
+          
+#     def generate_candidate_questions(
+#         self,
+#         user_query: str,
+#         tool_calls: List[ToolCall],
+#         max_questions: int = 5
+#     ) -> List[ClarificationQuestion]:
+#         """
+#         Generate candidate clarification questions.
+        
+#         Args:
+#             user_query: Original user query
+#             tool_calls: Current tool calls with uncertainty
+#             max_questions: Maximum number of questions to generate
+            
+#         Returns:
+#             List of clarification questions
+#         """
+#         # Extract uncertain arguments
+#         uncertain_args = []
+#         for tc in tool_calls:
+#             tool = self.tool_registry.get_tool(tc.tool_name)
+#             if not tool:
+#                 continue
+                
+#             for arg_name, arg_state in tc.arg_states.items():
+#                 if arg_state.certainty < 0.9:  # Only consider uncertain arguments
+#                     arg = tool.get_argument(arg_name)
+#                     if arg:
+#                         uncertain_args.append({
+#                             "tool_name": tc.tool_name,
+#                             "arg_name": arg_name,
+#                             "domain": str(arg.domain),
+#                             "description": arg.description,
+#                             "certainty": arg_state.certainty
+#                         })
+        
+#         # Prepare tool call information for the LLM
+#         tool_calls_info = []
+#         for tc in tool_calls:
+#             tool_calls_info.append({
+#                 "tool_name": tc.tool_name,
+#                 "arguments": tc.arguments
+#             })
+        
+#         # Create prompt for question generation
+#         prompt = self._create_question_generation_prompt(
+#             user_query=user_query,
+#             tool_calls=tool_calls_info,
+#             uncertain_args=uncertain_args
+#         )
+        
+#         # Call LLM to generate questions
+#         questions_json = self.llm.generate_json(
+#             prompt=prompt,
+#             response_model={
+#                 "questions": [
+#                     {
+#                         "question": "string",
+#                         "target_args": [["tool_name", "arg_name"]]
+#                     }
+#                 ]
+#             },
+#             max_tokens=2000
+#         )
+        
+#         # Process the results
+#         questions = []
+#         if "questions" in questions_json:
+#             for i, q_data in enumerate(questions_json["questions"]):
+#                 if i >= max_questions:
+#                     break
+                    
+#                 q_text = q_data.get("question", "")
+#                 target_args = q_data.get("target_args", [])
+                
+#                 if q_text and target_args:
+#                     q_id = f"q_{len(questions)}"
+#                     question = ClarificationQuestion(
+#                         question_id=q_id,
+#                         question_text=q_text,
+#                         target_args=target_args
+#                     )
+#                     questions.append(question)
+        
+#         return questions
+
+#     def _create_question_generation_prompt(
+#         self,
+#         user_query: str,
+#         tool_calls: List[Dict],
+#         uncertain_args: List[Dict]
+#     ) -> str:
+#         """
+#         Create a prompt for question generation.
+        
+#         Args:
+#             user_query: Original user query
+#             tool_calls: Current tool calls
+#             uncertain_args: List of uncertain arguments
+            
+#         Returns:
+#             Formatted prompt string
+#         """
+#         # Get the first tool call to determine which plugin to use
+#         if tool_calls:
+#             first_tool = tool_calls[0].get("tool_name", "")
+#             plugin = self.plugin_manager.get_plugin_for_tool(first_tool)
+            
+#             if plugin:
+#                 # Use plugin-specific template if available
+#                 templates = plugin.get_prompt_templates()
+#                 if "question_generation" in templates:
+#                     template = templates["question_generation"]
+#                     return template.format(
+#                         user_query=user_query,
+#                         tool_calls=tool_calls,
+#                         uncertain_args=uncertain_args
+#                     )
+        
+#         # Fall back to default template if no plugin-specific one is available
+#         default_template = """
+# You are an AI assistant that helps users by understanding their queries and executing tool calls.
+
+# Original user query:
+# "{user_query}"
+
+# Based on the query, I've determined that the following tool calls are needed, but some arguments are uncertain:
+
+# Tool Calls:
+# {tool_calls}
+
+# Uncertain Arguments:
+# {uncertain_args}
+
+# Your task is to generate clarification questions that would help resolve the uncertainty about specific arguments.
+
+# Instructions:
+# 1. Generate questions that are clear, specific, and directly address the uncertain arguments
+# 2. Each question should target one or more specific arguments
+# 3. Questions should be conversational and easy for a user to understand
+# 4. For each question, specify which tool and argument(s) it aims to clarify
+
+# Return your response as a JSON object with the following structure:
+# {{
+#   "questions": [
+#     {{
+#       "question": "A clear question to ask the user",
+#       "target_args": [["tool_name", "arg_name"], ["tool_name", "other_arg_name"]]
+#     }}
+#   ]
+# }}
+
+# Ensure that each question targets at least one uncertain argument.
+# """
         return default_template.format(
             user_query=user_query,
             tool_calls=tool_calls,
@@ -352,100 +647,100 @@ Ensure that each question targets at least one uncertain argument.
                 self.arg_clarification_counts[key] = self.arg_clarification_counts.get(key, 0) + 1
         self.total_clarifications += 1
     
-    def process_user_response(
-        self,
-        question: ClarificationQuestion,
-        user_response: str,
-        tool_calls: List[ToolCall]
-    ) -> List[ToolCall]:
-        """
-        Process user response to a clarification question.
+#     def process_user_response(
+#         self,
+#         question: ClarificationQuestion,
+#         user_response: str,
+#         tool_calls: List[ToolCall]
+#     ) -> List[ToolCall]:
+#         """
+#         Process user response to a clarification question.
         
-        Args:
-            question: The question that was asked
-            user_response: User's response to the question
-            tool_calls: Current tool calls to update
+#         Args:
+#             question: The question that was asked
+#             user_response: User's response to the question
+#             tool_calls: Current tool calls to update
             
-        Returns:
-            Updated tool calls
-        """
-        # Prepare context for the LLM
-        prompt = f"""
-You are an AI assistant that helps users by understanding their queries and executing tool calls.
+#         Returns:
+#             Updated tool calls
+#         """
+#         # Prepare context for the LLM
+#         prompt = f"""
+# You are an AI assistant that helps users by understanding their queries and executing tool calls.
 
-A user was asked the following clarification question:
-"{question.question_text}"
+# A user was asked the following clarification question:
+# "{question.question_text}"
 
-The user's response was:
-"{user_response}"
+# The user's response was:
+# "{user_response}"
 
-This question was targeting the following arguments:
-{question.target_args}
+# This question was targeting the following arguments:
+# {question.target_args}
 
-The current tool calls are:
-{[tc.to_dict() for tc in tool_calls]}
+# The current tool calls are:
+# {[tc.to_dict() for tc in tool_calls]}
 
-Your task is to update the tool calls based on the user's response. Focus specifically on the target arguments.
+# Your task is to update the tool calls based on the user's response. Focus specifically on the target arguments.
 
-Return your response as a JSON object with the updated tool calls:
-{{
-  "updated_tool_calls": [
-    {{
-      "tool_name": "tool_name",
-      "arguments": {{
-        "arg1": "value1",
-        "arg2": "value2"
-      }}
-    }}
-  ]
-}}
-"""
+# Return your response as a JSON object with the updated tool calls:
+# {{
+#   "updated_tool_calls": [
+#     {{
+#       "tool_name": "tool_name",
+#       "arguments": {{
+#         "arg1": "value1",
+#         "arg2": "value2"
+#       }}
+#     }}
+#   ]
+# }}
+# """
         
-        # Call LLM to update tool calls
-        updated_calls_json = self.llm.generate_json(
-            prompt=prompt,
-            response_model={
-                "updated_tool_calls": [
-                    {
-                        "tool_name": "string",
-                        "arguments": {}
-                    }
-                ]
-            },
-            max_tokens=2000
-        )
+#         # Call LLM to update tool calls
+#         updated_calls_json = self.llm.generate_json(
+#             prompt=prompt,
+#             response_model={
+#                 "updated_tool_calls": [
+#                     {
+#                         "tool_name": "string",
+#                         "arguments": {}
+#                     }
+#                 ]
+#             },
+#             max_tokens=2000
+#         )
         
-        # Process the results
-        if "updated_tool_calls" in updated_calls_json:
-            updated_tool_calls = []
+#         # Process the results
+#         if "updated_tool_calls" in updated_calls_json:
+#             updated_tool_calls = []
             
-            # Map original tool calls by tool name for reference
-            tool_call_map = {tc.tool_name: tc for tc in tool_calls}
+#             # Map original tool calls by tool name for reference
+#             tool_call_map = {tc.tool_name: tc for tc in tool_calls}
             
-            for updated_call_data in updated_calls_json["updated_tool_calls"]:
-                tool_name = updated_call_data.get("tool_name", "")
-                arguments = updated_call_data.get("arguments", {})
+#             for updated_call_data in updated_calls_json["updated_tool_calls"]:
+#                 tool_name = updated_call_data.get("tool_name", "")
+#                 arguments = updated_call_data.get("arguments", {})
                 
-                # Check if this is updating an existing tool call
-                if tool_name in tool_call_map:
-                    # Update existing tool call
-                    original_tc = tool_call_map[tool_name]
-                    # Merge arguments, keeping original ones that weren't updated
-                    merged_args = original_tc.arguments.copy()
-                    merged_args.update(arguments)
+#                 # Check if this is updating an existing tool call
+#                 if tool_name in tool_call_map:
+#                     # Update existing tool call
+#                     original_tc = tool_call_map[tool_name]
+#                     # Merge arguments, keeping original ones that weren't updated
+#                     merged_args = original_tc.arguments.copy()
+#                     merged_args.update(arguments)
                     
-                    updated_tc = ToolCall(tool_name, merged_args)
-                    updated_tool_calls.append(updated_tc)
-                else:
-                    # This is a new tool call
-                    new_tc = ToolCall(tool_name, arguments)
-                    updated_tool_calls.append(new_tc)
+#                     updated_tc = ToolCall(tool_name, merged_args)
+#                     updated_tool_calls.append(updated_tc)
+#                 else:
+#                     # This is a new tool call
+#                     new_tc = ToolCall(tool_name, arguments)
+#                     updated_tool_calls.append(new_tc)
             
-            # If no tool calls were returned, keep the original ones
-            if not updated_tool_calls:
-                return tool_calls
+#             # If no tool calls were returned, keep the original ones
+#             if not updated_tool_calls:
+#                 return tool_calls
                 
-            return updated_tool_calls
+#             return updated_tool_calls
         
-        # If something went wrong, return the original tool calls
-        return tool_calls
+#         # If something went wrong, return the original tool calls
+#         return tool_calls

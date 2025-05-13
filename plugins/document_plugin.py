@@ -405,13 +405,13 @@ class DocumentPlugin(BasePlugin):
         for tool in self._tools:
             for arg in tool.get("arguments", []):
                 domain = arg.get("domain", {})
-                if domain.get("data_dependent") and domain.get("type") == "numeric_range":
+                if domain.get("data_dependent"):
                     if arg["name"] in ["page_num", "start", "end"]:
                         updates[f"{tool['name']}.{arg['name']}"] = {
                             "type": "numeric_range",
                             "values": [1, num_pages]
                         }
-        
+
         return updates
     
     def get_uncertainty_context(self) -> Dict[str, Any]:
@@ -427,24 +427,53 @@ class DocumentPlugin(BasePlugin):
             "tool_selection": """
 You are an AI assistant that helps users with document operations.
 
+Conversation history:
+{conversation_history}
+
 User query: "{user_query}"
 
 Available tools:
 {tool_descriptions}
 
-Please analyze the user's query and determine which tool(s) should be called to fulfill the request.
-For each tool, specify all required parameters. If a parameter is uncertain, use "<UNK>" as the value.
-
-Think through this step by step:
+Please reason step-by-step about what the user is asking for:
 1. What is the user trying to accomplish with the document?
-2. Which tool(s) are needed to complete this task?
-3. What parameters are needed for each tool?
-4. Which parameters can be determined from the query, and which are uncertain?
+2. What information do we already have from the conversation history?
+3. What tools would help accomplish this task?
+4. What parameters are needed for each tool?
+5. Do we have enough information to execute these tools, or do we need to ask clarifying questions?
+
+After your reasoning, select the appropriate tool(s) to call.
+
+Tool calls should be formatted as:
+{{
+  "tool_name": "name_of_tool",
+  "arguments": {{
+    "arg1": "value1",
+    "arg2": "<UNK>" if uncertain
+  }}
+}}
+
+Return your response as a JSON object with the following structure:
+{{
+  "reasoning": "Your step-by-step reasoning about what tools to use and why",
+  "tool_calls": [
+    {{
+      "tool_name": "name_of_tool",
+      "arguments": {{
+        "arg1": "value1",
+        "arg2": "<UNK>"
+      }}
+    }}
+  ]
+}}
 """,
             "question_generation": """
 You are an AI assistant that helps users with document operations.
 
-User query: "{user_query}"
+Conversation history:
+{conversation_history}
+
+Original user query: "{user_query}"
 
 I've determined that the following tool calls are needed, but some arguments are uncertain:
 
@@ -461,5 +490,15 @@ Instructions:
 2. Each question should target one or more specific arguments
 3. Questions should be conversational and easy for a user to understand
 4. For each question, specify which tool and argument(s) it aims to clarify
+
+Return your response as a JSON object with the following structure:
+{{
+  "questions": [
+    {{
+      "question": "A clear question to ask the user",
+      "target_args": [["tool_name", "arg_name"], ["tool_name", "other_arg_name"]]
+    }}
+  ]
+}}
 """
         }

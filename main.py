@@ -130,7 +130,7 @@ def run_simulation(
     verbose: bool = False
 ) -> Dict[str, Any]:
     """
-    Run a disambiguation simulation.
+    Run a disambiguation simulation with multi-turn support using the ReactAgent.
     
     Args:
         simulation_data: Simulation data
@@ -154,7 +154,7 @@ def run_simulation(
     # Extract API-specific context and pass it to the relevant plugins
     context = {
         k: v for k, v in simulation_data.items() 
-        if k not in ["user_query", "user_intent", "ground_truth_tool_calls"]
+        if k not in ["user_query", "user_intent", "ground_truth_tool_calls", "potential_follow_ups"]
     }
     
     # Update tool registry with data-dependent domains
@@ -163,6 +163,18 @@ def run_simulation(
     # Initialize tool executor
     tool_executor = ToolExecutor(tool_registry, plugin_manager)
     
+    # Initialize the React Agent
+    from core.react_agent import ReactAgent
+    agent = ReactAgent(
+        llm_provider=llm_provider,
+        tool_registry=tool_registry,
+        uncertainty_calculator=uncertainty_calculator,
+        question_generator=question_generator,
+        tool_executor=tool_executor,
+        plugin_manager=plugin_manager,
+        config=question_config
+    )
+    
     # Initialize user simulator
     user_simulator = UserSimulator(
         llm_provider=llm_provider,
@@ -170,251 +182,104 @@ def run_simulation(
         user_intent=user_intent
     )
     
-    # Initialize conversation logging
+    # Initialize conversation tracking
     conversation = []
+    all_tool_calls = []
+    all_execution_results = []
+    
+    # Add initial user query to conversation
     conversation.append({
         "role": "user",
         "message": user_query,
         "type": "initial"
     })
     
-    # Generate initial tool calls
-    logger.info(f"Generating initial tool calls for: {user_query}")
-    tool_descriptions = tool_registry.get_tool_descriptions()
-    
-    tool_call_results = llm_provider.generate_tool_calls(
-        user_query=user_query,
-        tool_descriptions=tool_descriptions
-    )
-    
-    # Convert to ToolCall objects
-    tool_calls = []
-    for tc_result in tool_call_results:
-        tool_name = tc_result.get("tool_name", "")
-        arguments = tc_result.get("arguments", {})
-        
-        tool_call = ToolCall(tool_name, arguments)
-        tool_calls.append(tool_call)
-    
-    initial_tool_calls = copy.deepcopy(tool_calls)
-    
-    # Calculate initial uncertainty
-    overall_certainty, arg_certainties = uncertainty_calculator.calculate_sequence_certainty(tool_calls)
-    logger.info(f"Initial overall certainty: {overall_certainty}")
-    
-    # Store question metrics
-    question_metrics = []
-    
-    # Main disambiguation loop
-    max_turns = simulation_config.get("max_turns", 10)
+    # Main simulation loop
     turn_count = 0
+    max_turns = simulation_config.get("max_turns", 10)
+    current_user_input = user_query
     
+    # Process the initial query
     while turn_count < max_turns:
         turn_count += 1
         logger.info(f"Turn {turn_count} of {max_turns}")
         
-        # Calculate uncertainty
-        overall_certainty, arg_certainties = uncertainty_calculator.calculate_sequence_certainty(tool_calls)
-        logger.info(f"Current overall certainty: {overall_certainty}")
+        # Process the current user input through the agent
+        is_initial = (turn_count == 1)
         
-        # Check if overall certainty is high enough
-        certainty_threshold = question_config.get("certainty_threshold", 0.9)
-        if overall_certainty > certainty_threshold:
-            logger.info(f"Certainty is high enough ({overall_certainty:.4f} > {certainty_threshold}), proceeding to execution")
-            conversation.append({
-                "role": "agent",
-                "message": "I have enough information to proceed.",
-                "type": "confirmation"
-            })
-            break
+        # Process the user input
+        agent_response = agent.process_user_input(current_user_input, is_initial=is_initial)
         
-        # Generate candidate questions
-        candidate_questions = question_generator.generate_candidate_questions(
-            user_query=user_query,
-            tool_calls=tool_calls,
-            max_questions=question_config.get("max_candidates", 5)
-        )
+        # Add agent response to conversation
+        conversation.append(agent_response["agent_message"])
         
-        # Evaluate questions
-        best_question, eval_metrics = question_generator.evaluate_questions(
-            questions=candidate_questions,
-            tool_calls=tool_calls,
-            base_threshold=question_config.get("base_threshold", 0.1),
-            certainty_threshold=certainty_threshold
-        )
-        
-        # Store question metrics for evaluation
-        if candidate_questions:
-            for q in candidate_questions:
-                question_metrics.append(q.to_dict())
-        
-        # Check if we should ask a question
-        if best_question:
-            # Ask the question
-            question_text = best_question.question_text
-            logger.info(f"Asking clarification question: {question_text}")
+        # If the agent is asking for clarification
+        if agent_response.get("requires_clarification", False):
+            # Get user response to clarification
+            user_response = user_simulator.get_response_to_question(agent_response["agent_message"]["message"])
+            logger.info(f"User response to clarification: {user_response}")
             
-            conversation.append({
-                "role": "agent",
-                "message": question_text,
-                "type": "clarification"
-            })
-            
-            # Get user response
-            user_response = user_simulator.get_response_to_question(question_text)
-            logger.info(f"User response: {user_response}")
-            
+            # Add user response to conversation
             conversation.append({
                 "role": "user",
                 "message": user_response,
                 "type": "clarification_response"
             })
             
-            # Update argument clarification counts
-            question_generator.update_arg_clarification_counts(best_question)
-            
-            # Process user response to update tool calls
-            updated_tool_calls = question_generator.process_user_response(
-                question=best_question,
-                user_response=user_response,
-                tool_calls=tool_calls
+            # Process the clarification response
+            clarification_response = agent.process_clarification_response(
+                user_response,
+                agent_response.get("potential_tool_calls", [])
             )
             
-            # Update tool calls
-            tool_calls = updated_tool_calls
+            # Add agent response to conversation
+            conversation.append(clarification_response["agent_message"])
             
+            # Track tool calls and execution results
+            if "tool_calls" in clarification_response:
+                all_tool_calls.extend(clarification_response["tool_calls"])
+            if "execution_results" in clarification_response:
+                all_execution_results.extend(clarification_response["execution_results"])
         else:
-            # No good questions, proceed to execution
-            logger.info("No good questions to ask, proceeding to execution")
-            conversation.append({
-                "role": "agent",
-                "message": "I'll proceed with the information I have.",
-                "type": "confirmation"
-            })
+            # Track tool calls and execution results from direct processing
+            if "tool_calls" in agent_response:
+                all_tool_calls.extend(agent_response["tool_calls"])
+            if "execution_results" in agent_response:
+                all_execution_results.extend(agent_response["execution_results"])
+        
+        # Check if the conversation should end
+        if agent.should_end_conversation() or turn_count >= max_turns:
+            logger.info("Agent indicated conversation should end or max turns reached.")
             break
-    
-    # Execute tool calls
-    logger.info("Executing tool calls")
-    conversation.append({
-        "role": "agent",
-        "message": f"Executing the following actions: {[tc.tool_name for tc in tool_calls]}",
-        "type": "execution"
-    })
-    
-    execution_results = tool_executor.execute_tool_calls(tool_calls)
-    
-    # Check if all executions were successful
-    all_succeeded = all(result.success for result in execution_results)
-    
-    if all_succeeded:
+        
+        # Get user's next request
+        next_user_input = user_simulator.get_next_request(agent.get_conversation_history())
+        
+        if next_user_input is None or next_user_input.strip() == "":
+            logger.info("User simulator has no more requests.")
+            break
+        
+        # Add follow-up request to conversation
+        logger.info(f"User follow-up request: {next_user_input}")
         conversation.append({
-            "role": "agent",
-            "message": "All actions executed successfully.",
-            "type": "execution_result"
+            "role": "user",
+            "message": next_user_input,
+            "type": "follow_up"
         })
-    else:
-        # Get the first error
-        error_result = next((result for result in execution_results if not result.success), None)
-        if error_result:
-            error_message = f"Error executing {error_result.tool_name}: {error_result.message}"
-            
-            # Try to get a clarification question for the error
-            clarification_question, updated_tool_calls = tool_executor.generate_error_clarification(
-                error_result=error_result,
-                tool_calls=tool_calls,
-                user_query=user_query,
-                llm_provider=llm_provider
-            )
-            
-            if clarification_question:
-                logger.info(f"Generated error clarification question: {clarification_question}")
-                
-                # Add the error and question to the conversation
-                conversation.append({
-                    "role": "agent",
-                    "message": f"{error_message}\n\n{clarification_question}",
-                    "type": "error_clarification"
-                })
-                
-                # Get user response
-                user_response = user_simulator.get_response_to_question(clarification_question)
-                logger.info(f"User response to error: {user_response}")
-                
-                conversation.append({
-                    "role": "user",
-                    "message": user_response,
-                    "type": "error_response"
-                })
-                
-                # Create a dummy ClarificationQuestion to update arg counts
-                error_q = ClarificationQuestion(
-                    question_id=f"error_q_{len(question_metrics)}",
-                    question_text=clarification_question,
-                    target_args=[(error_result.tool_name, param) for param in error_result.error.split()]
-                )
-                
-                # Update clarification counts
-                question_generator.update_arg_clarification_counts(error_q)
-                
-                # Store question metrics
-                question_metrics.append(error_q.to_dict())
-                
-                # Try to update tool calls based on the user's response
-                tool_calls = question_generator.process_user_response(
-                    question=error_q,
-                    user_response=user_response,
-                    tool_calls=updated_tool_calls
-                )
-                
-                # Try executing the updated tool calls
-                logger.info("Executing updated tool calls after error")
-                conversation.append({
-                    "role": "agent",
-                    "message": f"Executing the updated actions: {[tc.tool_name for tc in tool_calls]}",
-                    "type": "execution_retry"
-                })
-                
-                execution_results = tool_executor.execute_tool_calls(tool_calls)
-                all_succeeded = all(result.success for result in execution_results)
-                
-                if all_succeeded:
-                    conversation.append({
-                        "role": "agent",
-                        "message": "All actions executed successfully after clarification.",
-                        "type": "execution_result"
-                    })
-                else:
-                    error_result = next((result for result in execution_results if not result.success), None)
-                    error_message = f"Error still persists: {error_result.tool_name}: {error_result.message}"
-                    conversation.append({
-                        "role": "agent",
-                        "message": error_message,
-                        "type": "execution_error"
-                    })
-            else:
-                # No clarification question generated
-                conversation.append({
-                    "role": "agent",
-                    "message": error_message,
-                    "type": "execution_error"
-                })
+        
+        # Update current user input for next loop
+        current_user_input = next_user_input
     
     # Prepare simulation result
     result = {
         "simulation_id": str(uuid.uuid4()),
         "user_query": user_query,
-        "initial_tool_calls": [tc.to_dict() for tc in initial_tool_calls],
-        "final_tool_calls": [tc.to_dict() for tc in tool_calls],
-        "execution_results": [result.to_dict() for result in execution_results],
+        "final_tool_calls": all_tool_calls,
+        "execution_results": all_execution_results,
         "conversation": conversation,
-        "questions": question_metrics,
-        "question_history": question_generator.question_history,
-        "arg_clarification_counts": dict(question_generator.arg_clarification_counts),
-        "total_clarifications": question_generator.total_clarifications,
+        "questions": agent.question_history,
         "turns": turn_count,
-        "success": all_succeeded,
-        "certainty_threshold": certainty_threshold,
-        "final_certainty": overall_certainty
+        "success": all(result.get("success", False) for result in all_execution_results) if all_execution_results else False
     }
     
     # Add evaluation metrics if we have ground truth
@@ -431,7 +296,7 @@ def run_simulation(
         print(visualizer.visualize_conversation(conversation))
         print("\n" + "="*80)
         print("TOOL CALLS:")
-        print(visualizer.visualize_tool_calls([tc.to_execution_dict() for tc in tool_calls], "Final Tool Calls"))
+        print(visualizer.visualize_tool_calls(all_tool_calls, "Final Tool Calls"))
         if "evaluation" in result:
             print("\n" + "="*80)
             print("EVALUATION:")
@@ -439,6 +304,7 @@ def run_simulation(
         print("\n" + "="*80)
     
     return result
+
 
 def main():
     """Main entry point."""

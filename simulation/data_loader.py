@@ -42,15 +42,16 @@ class SimulationDataLoader:
             
         except Exception as e:
             logger.exception(f"Error loading simulation data from {file_path}")
-            # Return an empty data structure
+            # Return an empty data structure with minimal required fields
             return {
                 "user_query": "",
                 "user_intent": "",
                 "ground_truth_tool_calls": [],
                 "number_of_pages": 1,
-                "pdf_name": "unknown.pdf"
+                "pdf_name": "unknown.pdf",
+                "potential_follow_ups": []
             }
-    
+
     def _validate_simulation_data(self, data: Dict[str, Any]) -> None:
         """
         Validate simulation data structure.
@@ -61,10 +62,13 @@ class SimulationDataLoader:
         Raises:
             ValueError: If the data is invalid
         """
-        required_fields = ["user_query", "ground_truth_tool_calls"]
-        for field in required_fields:
-            if field not in data:
-                raise ValueError(f"Missing required field: {field}")
+        # Allow either user_query or initial_query as the main query field
+        if "user_query" not in data and "initial_query" not in data:
+            raise ValueError(f"Missing required field: user_query or initial_query")
+        
+        # If initial_query is used, normalize to user_query for backward compatibility
+        if "initial_query" in data and "user_query" not in data:
+            data["user_query"] = data["initial_query"]
         
         # Validate ground truth tool calls
         tool_calls = data.get("ground_truth_tool_calls", [])
@@ -76,6 +80,14 @@ class SimulationDataLoader:
                 raise ValueError("Each tool call must have a tool_name")
             if "parameters" not in tc:
                 raise ValueError("Each tool call must have parameters")
+            
+            # If turn information is not present, add it (for backward compatibility)
+            if "turn" not in tc:
+                tc["turn"] = 1  # Default to turn 1 if not specified
+        
+        # Validate potential follow-ups if present
+        if "potential_follow_ups" in data and not isinstance(data["potential_follow_ups"], list):
+            raise ValueError("potential_follow_ups must be a list")
     
     def list_simulation_files(self) -> List[str]:
         """

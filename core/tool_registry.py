@@ -3,6 +3,7 @@ from typing import Dict, List, Union, Any, Optional, Callable
 import logging
 import copy
 from core.plugin_manager import PluginManager
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,12 @@ class ArgumentDomain:
         elif self.domain_type == DomainType.NUMERIC_RANGE:
             domain_dict["range"] = self.values
         elif self.domain_type == DomainType.LIST:
-            domain_dict["element_domain"] = self.values.to_dict()
+            # Check if values has to_dict method before calling it
+            if hasattr(self.values, 'to_dict'):
+                domain_dict["element_domain"] = self.values.to_dict()
+            else:
+                # Handle the case where values is not a domain object
+                domain_dict["element_domain"] = self.values
             
         return domain_dict
     
@@ -325,7 +331,7 @@ class ToolRegistry:
         for plugin_name, plugin in self.plugin_manager.plugins.items():
             plugin_updates = plugin.get_domain_updates_from_context(data_context)
             all_updates.update(plugin_updates)
-            
+                
         # Apply updates to tool arguments
         for update_key, domain_update in all_updates.items():
             try:
@@ -334,10 +340,18 @@ class ToolRegistry:
                 
                 if tool:
                     arg = tool.get_argument(arg_name)
-                    if arg:
-                        # Update the domain values
+                    if arg and arg.domain:
+                        # Update the domain values in the ToolRegistry's copy
                         if domain_update.get("type") == "numeric_range":
                             arg.domain.values = domain_update.get("values")
-                        # Add other domain type updates as needed
+                        
+                        # Also update the domain values in the plugin's internal tool definitions
+                        plugin = self.plugin_manager.get_plugin_for_tool(tool_name)
+                        if plugin and hasattr(plugin, '_tools'):
+                            for tool_def in plugin._tools:
+                                if tool_def["name"] == tool_name:
+                                    for arg_def in tool_def.get("arguments", []):
+                                        if arg_def["name"] == arg_name and "domain" in arg_def:
+                                            arg_def["domain"]["values"] = domain_update.get("values")
             except Exception as e:
                 logger.error(f"Error updating domain for {update_key}: {e}")
