@@ -507,6 +507,7 @@ def main():
         
         # Save result
         results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
+        results_dir = os.path.join(results_dir, "clarify_agent")
         os.makedirs(results_dir, exist_ok=True)
         
         if args.output:
@@ -560,6 +561,7 @@ def main():
             
             # Save result
             results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
+            results_dir = os.path.join(results_dir, "clarify_agent")
             os.makedirs(results_dir, exist_ok=True)
             
             # Generate output filename based on input filename
@@ -589,7 +591,7 @@ def main():
             
             summary_path = os.path.join(
                 config.SIMULATION_CONFIG.get("results_dir", "simulation_results"),
-                "summary.json"
+                "summary_clarify_agent.json"
             )
             
             save_json(summary, summary_path, pretty=True)

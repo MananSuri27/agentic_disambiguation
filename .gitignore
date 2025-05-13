@@ -20,3 +20,15 @@ text_scratch.txt
 
 logs/
 
+analysis*/
+multi_alpha_grid*/
+
+visualization_*/
+
+*.log
+
+*_summary.json
+
+multi_alpha_grid*.png
+analyze_hyperparameters.py
+
