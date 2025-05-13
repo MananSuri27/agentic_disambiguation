@@ -77,6 +77,8 @@ Generate a realistic user response to this question. The response should:
 3. Be consistent with the user's original intent and the ground truth
 4. Not explicitly mention the ground truth tool calls or parameters directly
 
+NEVER BREAK CHARACTER, DO NOT THINK!
+
 Respond as the user would:
 """
         
@@ -138,6 +140,8 @@ Consider:
 
 If you believe the user would have a follow-up request, provide it in a natural, conversational way.
 If you believe the conversation is complete, respond with "CONVERSATION_COMPLETE".
+
+NEVER BREAK CHARACTER, DO NOT THINK!
 
 Decision:
 """

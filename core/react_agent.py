@@ -295,6 +295,8 @@ Please reason step-by-step about what the user is asking for:
 
 Think carefully about each step before proceeding to the next one.
 
+USE <UNK> DETAILS ABOUT THE PARAMETER ARE NOT MENTIONED IN THE REQUEST.
+
 After your reasoning, select the appropriate tool(s) to call.
 
 Tool calls should be formatted as:
