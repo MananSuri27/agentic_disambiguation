@@ -145,7 +145,8 @@ class ReactAgent:
                 "requires_clarification": False,
                 "success": False,
                 "conversation_status": "awaiting_clarification",
-                "all_tool_call_attempts": self.context.all_tool_call_attempts
+                "all_tool_call_attempts": self.context.all_tool_call_attempts,
+                "all_candidate_questions": self.question_generator.get_all_candidate_questions()
             }
         
         # Calculate uncertainty
@@ -225,32 +226,44 @@ class ReactAgent:
                 "requires_clarification": False,
                 "success": True,
                 "conversation_status": "awaiting_further_requests",
-                "all_tool_call_attempts": self.context.all_tool_call_attempts
+                "all_tool_call_attempts": self.context.all_tool_call_attempts,
+                "all_candidate_questions": self.question_generator.get_all_candidate_questions()
             }
         
         # Execute the new tool calls (or none if empty list)
         execution_results = self.tool_executor.execute_tool_calls(new_tool_calls)
+
+        # Record execution results in all_tool_call_attempts
+        for i, result in enumerate(execution_results):
+            if i < len(new_tool_calls):
+                # Find the corresponding tool call attempt
+                for attempt in self.context.all_tool_call_attempts:
+                    if attempt["was_executed"] and attempt["tool_call"]["tool_name"] == result.tool_name:
+                        # Add execution result to this attempt
+                        attempt["execution_result"] = result.to_dict()
+                        attempt["success"] = result.success
+                        break
+                
+            # OBSERVE phase - process results
+            logger.info("Processing execution results")
+            observation_results = self._observe(execution_results)
+            
+            # Add execution results to tracking
+            self.all_tool_calls.extend(new_tool_calls)
+            self.all_execution_results.extend(execution_results)
+            
+            # If there were failures that need clarification
+            if observation_results.get("needs_clarification", False):
+                logger.info("Tool execution failed, needs clarification from user")
+                return self._handle_tool_failures_with_clarification(observation_results["failures"])
+            
+            # Set the task completion flag
+            self.context.current_task_complete = True
+            
+            # Generate response based on execution results
+            logger.info("Task complete, generating response")
+            return self._generate_response(observation_results)
         
-        # OBSERVE phase - process results
-        logger.info("Processing execution results")
-        observation_results = self._observe(execution_results)
-        
-        # Add execution results to tracking
-        self.all_tool_calls.extend(new_tool_calls)
-        self.all_execution_results.extend(execution_results)
-        
-        # If there were failures that need clarification
-        if observation_results.get("needs_clarification", False):
-            logger.info("Tool execution failed, needs clarification from user")
-            return self._handle_tool_failures_with_clarification(observation_results["failures"])
-        
-        # Set the task completion flag
-        self.context.current_task_complete = True
-        
-        # Generate response based on execution results
-        logger.info("Task complete, generating response")
-        return self._generate_response(observation_results)
-    
     def _reason(self, user_input: str) -> Tuple[List[ToolCall], str]:
         """
         Reasoning phase: determine what tools to use.
@@ -442,9 +455,10 @@ Return your response as a JSON object with the following structure:
             "reasoning": self.context.current_reasoning,
             "all_reasoning_history": self.context.all_reasoning_history,
             "conversation_status": "awaiting_clarification",
-            "all_tool_call_attempts": self.context.all_tool_call_attempts
+            "all_tool_call_attempts": self.context.all_tool_call_attempts,
+            "all_candidate_questions": self.question_generator.get_all_candidate_questions()
         }
-    
+            
     def _handle_tool_failures_with_clarification(self, failures: List[ToolExecutionResult]) -> Dict[str, Any]:
         """
         Handle tool failures by asking clarification using existing system.
@@ -533,7 +547,8 @@ Your question should be specific, helpful, and focus on resolving the error.
             "reasoning": self.context.current_reasoning,
             "all_reasoning_history": self.context.all_reasoning_history,
             "conversation_status": "awaiting_clarification",  # Still need clarification even though not using formal mechanism
-            "all_tool_call_attempts": self.context.all_tool_call_attempts
+            "all_tool_call_attempts": self.context.all_tool_call_attempts,
+            "all_candidate_questions": self.question_generator.get_all_candidate_questions()
         }
     
     def _generate_error_resolution(self, error_result: ToolExecutionResult, user_query: str) -> Tuple[str, List[ToolCall]]:
@@ -659,7 +674,8 @@ Return your response as a JSON object with the following structure:
                 "reasoning": self.context.current_reasoning,
                 "all_reasoning_history": self.context.all_reasoning_history,
                 "conversation_status": "awaiting_clarification",
-                "all_tool_call_attempts": self.context.all_tool_call_attempts
+                "all_tool_call_attempts": self.context.all_tool_call_attempts,
+                "all_candidate_questions": self.question_generator.get_all_candidate_questions()
             }
         
         # Build a simple response
@@ -731,7 +747,8 @@ Return your response as a JSON object with the following structure:
             "reasoning": self.context.current_reasoning,
             "all_reasoning_history": self.context.all_reasoning_history,
             "conversation_status": "awaiting_further_requests",  # Signal that we're ready for new requests
-            "all_tool_call_attempts": self.context.all_tool_call_attempts
+            "all_tool_call_attempts": self.context.all_tool_call_attempts,
+            "all_candidate_questions": self.question_generator.get_all_candidate_questions()
         }
     
     def process_clarification_response(self, user_response: str, previous_tool_calls: List[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -826,11 +843,23 @@ Return your response as a JSON object with the following structure:
                 "reasoning": self.context.current_reasoning,
                 "all_reasoning_history": self.context.all_reasoning_history,
                 "conversation_status": "awaiting_further_requests",
-                "all_tool_call_attempts": self.context.all_tool_call_attempts
+                "all_tool_call_attempts": self.context.all_tool_call_attempts,
+                "all_candidate_questions": self.question_generator.get_all_candidate_questions()
             }
         
         # Execute the new tool calls with updated information
         execution_results = self.tool_executor.execute_tool_calls(new_tool_calls)
+
+        # Update all_tool_call_attempts with execution results
+        for i, result in enumerate(execution_results):
+            if i < len(new_tool_calls):
+                # Find the corresponding tool call attempt
+                for attempt in self.context.all_tool_call_attempts:
+                    if attempt["was_executed"] and attempt["tool_call"]["tool_name"] == result.tool_name:
+                        # Add execution result to this attempt
+                        attempt["execution_result"] = result.to_dict()
+                        attempt["success"] = result.success
+                        break
         
         # OBSERVE phase - process results
         observation_results = self._observe(execution_results)
@@ -891,3 +920,7 @@ Return your response as a JSON object with the following structure:
             "successful_execution_count": sum(1 for result in self.all_execution_results if result.success),
             "question_count": len(self.question_history)
         }
+    
+    def get_all_tool_call_attempts(self) -> List[Dict[str, Any]]:
+        """Get all tool call attempts (successful and failed)."""
+        return self.context.all_tool_call_attempts

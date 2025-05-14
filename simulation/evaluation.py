@@ -46,6 +46,12 @@ class SimulationEvaluator:
         # Extract question metrics
         questions = simulation_result.get("questions", [])
         
+        # Extract all candidate questions if available
+        all_candidate_questions = simulation_result.get("all_candidate_questions", [])
+        
+        # Extract all tool call attempts
+        all_tool_call_attempts = simulation_result.get("all_tool_call_attempts", [])
+        
         # Calculate success metrics - distinction between valid and correct
         validity_metrics = self._calculate_validity_metrics(final_tool_calls)
         correctness_metrics = self._calculate_correctness_metrics(ground_truth, final_tool_calls)
@@ -54,18 +60,16 @@ class SimulationEvaluator:
         conversation_metrics = self._calculate_conversation_metrics(conversation)
         
         # Calculate question metrics
-        question_metrics = self._calculate_question_metrics(questions)
-        
-        # Calculate multi-turn metrics
-        multi_turn_metrics = self._calculate_multi_turn_metrics(ground_truth, final_tool_calls, conversation)
+        question_metrics = self._calculate_question_metrics(questions, all_candidate_questions)
         
         # Combine all metrics
         metrics["validity"] = validity_metrics
         metrics["correctness"] = correctness_metrics
         metrics["conversation"] = conversation_metrics
         metrics["questions"] = question_metrics
-        metrics["multi_turn"] = multi_turn_metrics
         metrics["num_questions"] = len(questions)
+        metrics["num_candidate_questions"] = len(all_candidate_questions)
+        metrics["num_tool_call_attempts"] = len(all_tool_call_attempts)
         
         # Overall success is achieved when tool calls are both valid and correct
         metrics["success"] = validity_metrics["all_valid"] and correctness_metrics["exact_match"]
@@ -282,13 +286,15 @@ class SimulationEvaluator:
     
     def _calculate_question_metrics(
         self,
-        questions: List[Dict[str, Any]]
+        questions: List[Dict[str, Any]],
+        all_candidate_questions: List[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Calculate metrics for the questions.
         
         Args:
             questions: List of questions with metrics
+            all_candidate_questions: List of all candidate questions (including rejected ones)
             
         Returns:
             Question metrics
@@ -300,11 +306,13 @@ class SimulationEvaluator:
                 "total": 0,
                 "average_evpi": 0.0,
                 "average_regret_reduction": 0.0,
-                "average_ucb_score": 0.0
+                "average_ucb_score": 0.0,
+                "total_candidates": len(all_candidate_questions) if all_candidate_questions else 0
             }
         
         # Count total questions
         metrics["total"] = len(questions)
+        metrics["total_candidates"] = len(all_candidate_questions) if all_candidate_questions else len(questions)
         
         # Calculate average metrics
         total_evpi = sum(q.get("metrics", {}).get("evpi", 0.0) for q in questions)
@@ -315,104 +323,12 @@ class SimulationEvaluator:
         metrics["average_regret_reduction"] = total_regret_reduction / len(questions) if questions else 0.0
         metrics["average_ucb_score"] = total_ucb_score / len(questions) if questions else 0.0
         
-        return metrics
-        
-    def _calculate_multi_turn_metrics(
-        self,
-        ground_truth: List[Dict[str, Any]],
-        final_tool_calls: List[Dict[str, Any]],
-        conversation: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        Calculate metrics specific to multi-turn simulations.
-        
-        Args:
-            ground_truth: Ground truth tool calls with turn information
-            final_tool_calls: Final tool calls from the simulation
-            conversation: Conversation history
-            
-        Returns:
-            Multi-turn metrics
-        """
-        metrics = {}
-        
-        # Group ground truth by turn
-        gt_by_turn = {}
-        for tc in ground_truth:
-            turn = tc.get("turn", 1)
-            if turn not in gt_by_turn:
-                gt_by_turn[turn] = []
-            gt_by_turn[turn].append(tc)
-        
-        # Count total turns in ground truth
-        metrics["expected_turns"] = len(gt_by_turn)
-        
-        # Count actual turns in conversation
-        actual_turns = set()
-        for turn in conversation:
-            if turn.get("role") == "user":
-                turn_type = turn.get("type", "")
-                if turn_type == "initial":
-                    actual_turns.add(1)
-                elif turn_type == "follow_up":
-                    # Crude way to estimate turn number
-                    actual_turns.add(len(actual_turns) + 1)
-                    
-        metrics["actual_turns"] = len(actual_turns)
-        
-        # Check per-turn success
-        turn_success = {}
-        for turn, gt_calls in gt_by_turn.items():
-            # For each turn, check if its tool calls were executed correctly
-            turn_success[turn] = self._check_turn_tool_calls(gt_calls, final_tool_calls)
-            
-        metrics["turn_success"] = turn_success
-        metrics["all_turns_successful"] = all(turn_success.values())
-        metrics["success_rate"] = sum(1 for success in turn_success.values() if success) / len(turn_success) if turn_success else 0.0
+        # If we have all candidate questions, calculate selection rate
+        if all_candidate_questions:
+            selected_count = sum(1 for q in all_candidate_questions if q.get("was_selected", False))
+            metrics["selection_rate"] = selected_count / len(all_candidate_questions) if all_candidate_questions else 0.0
         
         return metrics
-        
-    def _check_turn_tool_calls(
-        self,
-        turn_gt_calls: List[Dict[str, Any]],
-        final_tool_calls: List[Dict[str, Any]]
-    ) -> bool:
-        """
-        Check if the tool calls for a specific turn were successful.
-        
-        Args:
-            turn_gt_calls: Ground truth tool calls for this turn
-            final_tool_calls: All tool calls from the simulation
-            
-        Returns:
-            True if all tool calls for this turn were successful, False otherwise
-        """
-        for gt_tc in turn_gt_calls:
-            gt_tool_name = gt_tc.get("tool_name")
-            gt_params = gt_tc.get("parameters", {})
-            
-            # Check if this tool call exists in final tool calls
-            found_match = False
-            for tc in final_tool_calls:
-                tc_tool_name = tc.get("tool_name")
-                tc_params = tc.get("parameters", tc.get("arguments", {}))
-                
-                if tc_tool_name == gt_tool_name:
-                    # Check if parameters match essential ones
-                    essential_params_match = True
-                    for param_name, gt_value in gt_params.items():
-                        if param_name not in tc_params or tc_params[param_name] != gt_value:
-                            essential_params_match = False
-                            break
-                            
-                    if essential_params_match:
-                        found_match = True
-                        break
-                        
-            if not found_match:
-                return False
-                
-        return True
 
 class SimulationVisualizer:
     """Class for visualizing simulation results."""
@@ -468,45 +384,74 @@ class SimulationVisualizer:
     
     def visualize_questions(
         self,
-        questions: List[Dict[str, Any]]
+        questions: List[Dict[str, Any]],
+        all_candidate_questions: List[Dict[str, Any]] = None
     ) -> str:
         """
         Visualize the questions and their metrics.
         
         Args:
             questions: List of questions with metrics
+            all_candidate_questions: List of all candidate questions
             
         Returns:
             Formatted questions string
         """
-        if not questions:
+        if not questions and not all_candidate_questions:
             return "No questions asked."
             
         lines = ["Questions and Metrics:"]
         
-        for i, q in enumerate(questions):
-            question_text = q.get("question_text", "")
-            target_args = q.get("target_args", [])
-            metrics = q.get("metrics", {})
+        if all_candidate_questions:
+            lines.append(f"\nTotal candidate questions: {len(all_candidate_questions)}")
+            lines.append(f"Total selected questions: {len(questions)}")
+            lines.append(f"Selection rate: {len(questions)/len(all_candidate_questions):.2f} if all_candidate_questions else 'N/A'")
             
-            # Format target arguments
-            target_args_str = ", ".join([f"{tool}.{arg}" for tool, arg in target_args])
-            
-            # Format metrics
-            evpi = metrics.get("evpi", 0.0)
-            regret_reduction = metrics.get("regret_reduction", 0.0)
-            ucb_score = metrics.get("ucb_score", 0.0)
-            
-            lines.append(f"\nQuestion {i+1}: {question_text}")
-            lines.append(f"Target Arguments: {target_args_str}")
-            lines.append(f"Metrics: EVPI={evpi:.4f}, Regret Reduction={regret_reduction:.4f}, UCB Score={ucb_score:.4f}")
+            # Display selected questions
+            if questions:
+                lines.append("\nSelected Questions:")
+                for i, q in enumerate(questions):
+                    question_text = q.get("question_text", "")
+                    target_args = q.get("target_args", [])
+                    metrics = q.get("metrics", {})
+                    
+                    # Format target arguments
+                    target_args_str = ", ".join([f"{tool}.{arg}" for tool, arg in target_args])
+                    
+                    # Format metrics
+                    evpi = metrics.get("evpi", 0.0)
+                    regret_reduction = metrics.get("regret_reduction", 0.0)
+                    ucb_score = metrics.get("ucb_score", 0.0)
+                    
+                    lines.append(f"\nQuestion {i+1}: {question_text}")
+                    lines.append(f"Target Arguments: {target_args_str}")
+                    lines.append(f"Metrics: EVPI={evpi:.4f}, Regret Reduction={regret_reduction:.4f}, UCB Score={ucb_score:.4f}")
+        else:
+            # Legacy format with only selected questions
+            for i, q in enumerate(questions):
+                question_text = q.get("question_text", "")
+                target_args = q.get("target_args", [])
+                metrics = q.get("metrics", {})
+                
+                # Format target arguments
+                target_args_str = ", ".join([f"{tool}.{arg}" for tool, arg in target_args])
+                
+                # Format metrics
+                evpi = metrics.get("evpi", 0.0)
+                regret_reduction = metrics.get("regret_reduction", 0.0)
+                ucb_score = metrics.get("ucb_score", 0.0)
+                
+                lines.append(f"\nQuestion {i+1}: {question_text}")
+                lines.append(f"Target Arguments: {target_args_str}")
+                lines.append(f"Metrics: EVPI={evpi:.4f}, Regret Reduction={regret_reduction:.4f}, UCB Score={ucb_score:.4f}")
         
         return "\n".join(lines)
     
     def visualize_tool_calls(
         self,
         tool_calls: List[Dict[str, Any]],
-        title: str = "Tool Calls"
+        title: str = "Tool Calls",
+        all_tool_call_attempts: List[Dict[str, Any]] = None
     ) -> str:
         """
         Visualize tool calls in a pretty format.
@@ -514,14 +459,28 @@ class SimulationVisualizer:
         Args:
             tool_calls: List of tool calls
             title: Title for the visualization
+            all_tool_call_attempts: List of all tool call attempts (successful and failed)
             
         Returns:
             Formatted tool calls string
         """
-        if not tool_calls:
-            return f"{title}: None"
+        lines = []
+        
+        if all_tool_call_attempts:
+            lines.append(f"All Tool Call Attempts: {len(all_tool_call_attempts)}")
+            successful_attempts = sum(1 for a in all_tool_call_attempts if a.get("was_executed", False) and a.get("success", False))
+            lines.append(f"Successful Attempts: {successful_attempts}")
+            lines.append(f"Failed Attempts: {sum(1 for a in all_tool_call_attempts if a.get('was_executed', False) and not a.get('success', False))}")
+            lines.append(f"Skipped Attempts: {sum(1 for a in all_tool_call_attempts if not a.get('was_executed', False))}")
             
-        lines = [f"{title}:"]
+            # Add detailed visualization of attempts if desired
+            # (omitted for brevity)
+            
+        if not tool_calls:
+            lines.append(f"\n{title}: None")
+            return "\n".join(lines)
+            
+        lines.append(f"\n{title}:")
         
         for i, tc in enumerate(tool_calls):
             tool_name = tc.get("tool_name", "")
@@ -551,7 +510,6 @@ class SimulationVisualizer:
         correctness = metrics.get("correctness", {})
         conversation = metrics.get("conversation", {})
         questions = metrics.get("questions", {})
-        multi_turn = metrics.get("multi_turn", {})
         
         lines = ["Evaluation Metrics:"]
         
@@ -568,21 +526,6 @@ class SimulationVisualizer:
         lines.append(f"- Tool Match Rate: {correctness.get('tool_match_rate', 0.0):.2f}")
         lines.append(f"- Parameter Match Rate: {correctness.get('param_match_rate', 0.0):.2f}")
         
-        # Multi-turn metrics if available
-        if multi_turn:
-            lines.append("\nMulti-Turn Metrics:")
-            lines.append(f"- Expected Turns: {multi_turn.get('expected_turns', 0)}")
-            lines.append(f"- Actual Turns: {multi_turn.get('actual_turns', 0)}")
-            lines.append(f"- All Turns Successful: {'Yes' if multi_turn.get('all_turns_successful', False) else 'No'}")
-            lines.append(f"- Turn Success Rate: {multi_turn.get('success_rate', 0.0):.2f}")
-            
-            # Per-turn success
-            turn_success = multi_turn.get("turn_success", {})
-            if turn_success:
-                lines.append("- Per-Turn Success:")
-                for turn, success in sorted(turn_success.items()):
-                    lines.append(f"  - Turn {turn}: {'Successful' if success else 'Failed'}")
-        
         # Overall success
         lines.append(f"\nOverall Success: {'Yes' if metrics.get('success', False) else 'No'}")
         
@@ -597,8 +540,15 @@ class SimulationVisualizer:
         # Question metrics
         lines.append(f"\nQuestion Metrics:")
         lines.append(f"- Total Questions: {questions.get('total', 0)}")
+        lines.append(f"- Total Candidate Questions: {questions.get('total_candidates', 0)}")
+        if questions.get('total_candidates', 0) > 0:
+            lines.append(f"- Selection Rate: {questions.get('total', 0) / questions.get('total_candidates', 1):.2f}")
         lines.append(f"- Average EVPI: {questions.get('average_evpi', 0.0):.4f}")
         lines.append(f"- Average Regret Reduction: {questions.get('average_regret_reduction', 0.0):.4f}")
         lines.append(f"- Average UCB Score: {questions.get('average_ucb_score', 0.0):.4f}")
+        
+        # Tool call attempt metrics 
+        lines.append(f"\nTool Call Attempt Metrics:")
+        lines.append(f"- Total Tool Call Attempts: {metrics.get('num_tool_call_attempts', 0)}")
         
         return "\n".join(lines)

@@ -225,7 +225,7 @@ class DocumentPlugin(BasePlugin):
                     },
                     {
                         "name": "object_name",
-                        "description": "List of text to redact",
+                        "description": "List of text to redact. PLEASE FORMAT WHATEVER CONTENT YOU GET AS A PYTHON LIST [...].",
                         "domain": {
                             "type": "list",
                             "importance": 0.9
@@ -281,7 +281,7 @@ class DocumentPlugin(BasePlugin):
                     },
                     {
                         "name": "object_name",
-                        "description": "List of text to highlight",
+                        "description": "List of text to highlight. PLEASE FORMAT WHATEVER CONTENT YOU GET AS A PYTHON LIST [...].",
                         "domain": {
                             "type": "list",
                             "importance": 0.9
@@ -337,7 +337,7 @@ class DocumentPlugin(BasePlugin):
                     },
                     {
                         "name": "object_name",
-                        "description": "List of text to underline",
+                        "description": "List of text to underline. PLEASE FORMAT WHATEVER CONTENT YOU GET AS A PYTHON LIST [...].",
                         "domain": {
                             "type": "list",
                             "importance": 0.9

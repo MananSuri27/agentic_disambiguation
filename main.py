@@ -336,7 +336,11 @@ def run_simulation(
                     logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
                 
                 # Update results tracking
-                # [...]
+                if "tool_calls" in clarification_response and clarification_response["tool_calls"]:
+                    all_tool_calls.extend(clarification_response["tool_calls"])
+                
+                if "execution_results" in clarification_response and clarification_response["execution_results"]:
+                    all_execution_results.extend(clarification_response["execution_results"])
                 
                 # Check if we need yet another clarification
                 next_status = clarification_response.get("conversation_status", "awaiting_further_requests")
@@ -400,6 +404,10 @@ def run_simulation(
             logger.info("Maximum number of turns reached.")
             break
     
+    # Get all tool call attempts and candidate questions
+    all_tool_call_attempts = agent.get_all_tool_call_attempts()
+    all_candidate_questions = agent.question_generator.get_all_candidate_questions()
+    
     # Prepare simulation result
     result = {
         "simulation_id": str(uuid.uuid4()),
@@ -408,6 +416,8 @@ def run_simulation(
         "execution_results": all_execution_results,
         "conversation": conversation,
         "questions": agent.question_history,
+        "all_candidate_questions": all_candidate_questions,
+        "all_tool_call_attempts": all_tool_call_attempts,
         "turns": turn_count,
         "success": all(result.get("success", False) for result in all_execution_results) if all_execution_results else False
     }
@@ -426,7 +436,7 @@ def run_simulation(
         print(visualizer.visualize_conversation(conversation))
         print("\n" + "="*80)
         print("TOOL CALLS:")
-        print(visualizer.visualize_tool_calls(all_tool_calls, "Final Tool Calls"))
+        print(visualizer.visualize_tool_calls(all_tool_calls, "Final Tool Calls", all_tool_call_attempts))
         if "evaluation" in result:
             print("\n" + "="*80)
             print("EVALUATION:")
@@ -465,49 +475,8 @@ def main():
     
     if args.data:
         # Run single simulation
-        simulation_data = data_loader.load_simulation_data(args.data)
-        
-        # Run simulation
-        result = run_simulation(
-            simulation_data=simulation_data,
-            plugin_manager=plugin_manager,
-            tool_registry=tool_registry,
-            llm_provider=llm_provider,
-            uncertainty_calculator=uncertainty_calculator,
-            question_generator=question_generator,
-            question_config=config.QUESTION_CONFIG,
-            simulation_config=config.SIMULATION_CONFIG,
-            verbose=args.verbose
-        )
-        
-        # Save result
-        results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
-        os.makedirs(results_dir, exist_ok=True)
-        
-        if args.output:
-            output_path = args.output
-        else:
-            # Generate output filename based on input filename
-            output_filename = generate_output_filename(args.data)
-            output_path = os.path.join(results_dir, output_filename)
-        
-        save_json(result, output_path, pretty=True)
-        logger.info(f"Saved result to {output_path}")
-        
-    else:
-        # Run all simulations in the data directory
-        simulation_files = data_loader.list_simulation_files()
-        
-        if not simulation_files:
-            logger.error("No simulation files found")
-            return
-        
-        results = []
-        
-        for file_path in simulation_files:
-            logger.info(f"Running simulation for {file_path}")
-            
-            simulation_data = data_loader.load_simulation_data(file_path)
+        try:
+            simulation_data = data_loader.load_simulation_data(args.data)
             
             # Run simulation
             result = run_simulation(
@@ -526,15 +495,138 @@ def main():
             results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
             os.makedirs(results_dir, exist_ok=True)
             
-            # Generate output filename based on input filename
-            output_filename = generate_output_filename(file_path)
-            output_path = os.path.join(results_dir, output_filename)
+            if args.output:
+                output_path = args.output
+            else:
+                # Generate output filename based on input filename
+                output_filename = generate_output_filename(args.data)
+                output_path = os.path.join(results_dir, output_filename)
             
             save_json(result, output_path, pretty=True)
             logger.info(f"Saved result to {output_path}")
             
-            # Store result for summary
-            results.append(result)
+        except Exception as e:
+            logger.exception(f"Error running simulation for {args.data}: {str(e)}")
+            print(f"ERROR: Failed to run simulation for {args.data}: {str(e)}")
+            
+            # Create an error result
+            error_result = {
+                "simulation_id": str(uuid.uuid4()),
+                "user_query": simulation_data.get("user_query", "") if "simulation_data" in locals() else "",
+                "error": True,
+                "error_message": str(e),
+                "error_traceback": traceback.format_exc()
+            }
+            
+            # Save error result
+            results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
+            os.makedirs(results_dir, exist_ok=True)
+            
+            if args.output:
+                output_path = args.output
+            else:
+                # Generate output filename based on input filename
+                output_filename = generate_output_filename(args.data)
+                output_path = os.path.join(results_dir, output_filename)
+            
+            save_json(error_result, output_path, pretty=True)
+            logger.info(f"Saved error result to {output_path}")
+            
+    else:
+        # Run all simulations in the data directory
+        simulation_files = data_loader.list_simulation_files()
+        
+        if not simulation_files:
+            logger.error("No simulation files found")
+            print(f"No simulation files found in {config.SIMULATION_CONFIG.get('data_dir', 'simulation_data')}")
+            return
+        
+        results = []
+        successful_runs = 0
+        failed_runs = 0
+        
+        for file_path in simulation_files:
+            # Skip summary files
+            if os.path.basename(file_path) in ["summary.json", "metrics_summary.json"]:
+                continue
+                
+            logger.info(f"Running simulation for {file_path}")
+            
+            try:
+                simulation_data = data_loader.load_simulation_data(file_path)
+                
+                # Run simulation
+                result = run_simulation(
+                    simulation_data=simulation_data,
+                    plugin_manager=plugin_manager,
+                    tool_registry=tool_registry,
+                    llm_provider=llm_provider,
+                    uncertainty_calculator=uncertainty_calculator,
+                    question_generator=question_generator,
+                    question_config=config.QUESTION_CONFIG,
+                    simulation_config=config.SIMULATION_CONFIG,
+                    verbose=args.verbose
+                )
+                
+                # Save result
+                results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
+                os.makedirs(results_dir, exist_ok=True)
+                
+                # Generate output filename based on input filename
+                output_filename = generate_output_filename(file_path)
+                output_path = os.path.join(results_dir, output_filename)
+                
+                save_json(result, output_path, pretty=True)
+                logger.info(f"Saved result to {output_path}")
+                
+                # Store result for summary
+                results.append(result)
+                successful_runs += 1
+                
+            except Exception as e:
+                logger.exception(f"Error running simulation for {file_path}: {str(e)}")
+                print(f"ERROR: Failed to run simulation for {file_path}: {str(e)}")
+                
+                # Create an error result
+                error_result = {
+                    "simulation_id": str(uuid.uuid4()),
+                    "user_query": simulation_data.get("user_query", "") if "simulation_data" in locals() else "",
+                    "error": True,
+                    "error_message": str(e),
+                    "error_traceback": traceback.format_exc(),
+                    "file_path": file_path
+                }
+                
+                # Save error result
+                results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
+                os.makedirs(results_dir, exist_ok=True)
+                
+                output_filename = generate_output_filename(file_path)
+                output_path = os.path.join(results_dir, output_filename)
+                
+                save_json(error_result, output_path, pretty=True)
+                logger.info(f"Saved error result to {output_path}")
+                
+                # Keep track of failed runs
+                failed_runs += 1
+                results.append(error_result)
+                
+                # Continue to next simulation
+                continue
+        
+        # Create summary
+        summary = {
+            "total_runs": len(simulation_files),
+            "successful_runs": successful_runs,
+            "failed_runs": failed_runs,
+            "success_rate": successful_runs / len(simulation_files) if simulation_files else 0.0
+        }
+        
+        # Save summary
+        summary_path = os.path.join(config.SIMULATION_CONFIG.get("results_dir", "simulation_results"), "summary.json")
+        save_json(summary, summary_path, pretty=True)
+        logger.info(f"Saved summary to {summary_path}")
+        print(f"Completed {successful_runs} simulations successfully, {failed_runs} failed. See {summary_path} for details.")
 
 if __name__ == "__main__":
     main()
