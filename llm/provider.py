@@ -104,6 +104,17 @@ class LLMProvider(abc.ABC):
         # Debug output to help identify the problem
         logger.debug(f"Attempting to parse JSON: {json_str[:500]}...")
         
+        # First, try to extract JSON from markdown code blocks if present
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', json_str)
+        if json_match:
+            extracted_json = json_match.group(1)
+            try:
+                return json.loads(extracted_json)
+            except json.JSONDecodeError:
+                # If extraction failed, continue with the repair process
+                logger.debug("Extracted JSON from code block but it's still invalid")
+                json_str = extracted_json  # Use the extracted JSON for further repairs
+        
         try:
             return json.loads(json_str)
         except json.JSONDecodeError as e:

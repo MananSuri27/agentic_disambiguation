@@ -1,5 +1,6 @@
 from typing import Dict, List, Any, Tuple, Optional
 import logging
+import sys
 from .provider import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,11 @@ class UserSimulator:
             k: v for k, v in ground_truth.items() 
             if k not in ["user_query", "user_intent", "ground_truth_tool_calls", "potential_follow_ups"]
         }
+        
+        # Track conversation turn for intent isolation
+        self.current_turn = 1
     
-    def get_response_to_question(self, question: str) -> str:
+    def get_response_to_question(self, question: str) -> Optional[str]:
         """
         Generate a simulated user response to a clarification question.
         
@@ -52,34 +56,57 @@ class UserSimulator:
             question: The question asked by the agent
             
         Returns:
-            Simulated user response
+            Simulated user response or None if user has no more requests
         """
+        # Check if this is an "anything else" question
+        if self._is_follow_up_question(question):
+            # In the case of "anything else" questions, we should either:
+            # 1. Return the next follow-up request if there is one
+            # 2. Return None to indicate the conversation should end
+            
+            # Check if we have a follow-up request
+            if self.potential_follow_ups and self.current_follow_up_index < len(self.potential_follow_ups):
+                next_follow_up = self.potential_follow_ups[self.current_follow_up_index]
+                self.current_follow_up_index += 1
+                logger.info(f"Using predefined follow-up in response to 'anything else' question: {next_follow_up}")
+                self.current_turn += 1
+                return next_follow_up
+            else:
+                # No more follow-ups, indicate conversation should end
+                logger.info("No more follow-ups, ending conversation")
+                return None
+        
+        # This is a specific clarification question, not a general "anything else" question
+        # Get only the ground truth relevant to the current turn to avoid leaking future intentions
+        current_turn_ground_truth = self._get_current_turn_ground_truth()
+        
         # Create a prompt for the LLM to generate a realistic user response
         prompt = f"""
 You are simulating a user who is interacting with an AI assistant.
 
 Original query: "{self.original_query}"
 
-User's intent: {self.user_intent}
+User's intent for the CURRENT request: {self.user_intent}
 
-Ground truth (what the user actually wants):
-{self.gt_tool_calls}
+Information needed for the CURRENT request (do not reveal future intentions):
+{current_turn_ground_truth}
 
 Additional context:
 {self.context}
 
-The AI assistant has asked the following clarification question:
+The AI assistant has asked the following specific question:
 "{question}"
 
-Generate a realistic user response to this question. The response should:
+Generate a realistic user response to this SPECIFIC question. The response should:
 1. Be natural and conversational
-2. Provide information that helps clarify the query
-3. Be consistent with the user's original intent and the ground truth
-4. Not explicitly mention the ground truth tool calls or parameters directly
+2. ONLY provide information that directly answers the specific question asked
+3. NOT mention any future requests or intentions the user might have
+4. ONLY focus on the current task, not on future tasks
+5. Be concise and to the point
 
-NEVER BREAK CHARACTER, DO NOT THINK!
+IMPORTANT: Never reveal future intentions. Respond ONLY to the specific question asked.
 
-Respond as the user would:
+NEVER BREAK CHARACTER. DO NOT THINK OUT LOUD. Respond directly as the user would:
 """
         
         # Generate the response
@@ -101,14 +128,12 @@ Respond as the user would:
         Returns:
             Simulated user request or None if the user would have no more requests
         """
-        # Check if the agent has indicated completion
-        if self._agent_indicates_completion(conversation_history):
-            return None
-            
         # If we have predefined follow-ups, use the next one
         if self.potential_follow_ups and self.current_follow_up_index < len(self.potential_follow_ups):
             next_follow_up = self.potential_follow_ups[self.current_follow_up_index]
             self.current_follow_up_index += 1
+            logger.info(f"Using predefined follow-up: {next_follow_up}")
+            self.current_turn += 1
             return next_follow_up
         
         # Format conversation history
@@ -157,46 +182,63 @@ Decision:
         
         # Check if the decision indicates completion
         if "CONVERSATION_COMPLETE" in decision or "conversation complete" in decision.lower():
+            logger.info("LLM determined conversation is complete")
             return None
             
+        logger.info(f"Generated follow-up request: {decision}")
+        self.current_turn += 1
         return decision
-        
-    def _agent_indicates_completion(self, conversation_history: List[Dict[str, Any]]) -> bool:
+    
+    def _is_follow_up_question(self, message: str) -> bool:
         """
-        Check if the agent has clearly indicated that the conversation is complete.
+        Determine if a message is asking if the user wants anything else.
         
         Args:
-            conversation_history: List of conversation turns
+            message: Message to analyze
             
         Returns:
-            True if the agent has indicated completion, False otherwise
+            True if it's a follow-up question, False otherwise
         """
-        # Look at the most recent agent messages
-        recent_agent_messages = []
-        for turn in reversed(conversation_history):
-            if turn.get("role") == "agent":
-                recent_agent_messages.append(turn.get("message", "").lower())
-                if len(recent_agent_messages) >= 2:
-                    break
-                    
-        # Check for completion indicators in the most recent agent messages
-        completion_phrases = [
-            "all done", 
-            "completed your request", 
-            "finished", 
-            "completed all tasks",
+        message = message.lower()
+        
+        # Check for standard patterns that indicate asking if user wants anything else
+        patterns = [
             "anything else",
+            "something else",
+            "can i help you with anything else",
             "is there anything else",
-            "all tasks have been completed",
-            "all set",
-            "that completes",
-            "all of your requests have been",
-            "task is complete",
-            "successfully completed"
+            "would you like me to help with anything else",
+            "would you like me to do anything else",
+            "is there something else",
+            "do you have any other requests",
+            "any other tasks",
+            "what else can i do for you"
         ]
         
-        for message in recent_agent_messages:
-            if any(phrase in message for phrase in completion_phrases):
-                return True
-                
-        return False
+        # Check if message contains a question mark and any of the patterns
+        contains_question_mark = "?" in message
+        contains_pattern = any(pattern in message for pattern in patterns)
+        
+        return contains_question_mark and contains_pattern
+    
+    def _get_current_turn_ground_truth(self) -> str:
+        """
+        Get ground truth relevant to the current turn only.
+        
+        Returns:
+            String representation of current turn ground truth
+        """
+        # Extract ground truth for current turn
+        current_turn_gt = []
+        for call in self.gt_tool_calls:
+            # If the call has turn information
+            turn = call.get("turn", 1)  # Default to turn 1 if not specified
+            if turn == self.current_turn:
+                current_turn_gt.append(call)
+        
+        # If no turn-specific ground truth, use the first tool call
+        if not current_turn_gt and self.gt_tool_calls:
+            if self.current_turn == 1:
+                current_turn_gt = [self.gt_tool_calls[0]]
+        
+        return str(current_turn_gt)

@@ -323,6 +323,8 @@ Return your response as a JSON object with the updated tool calls:
     }}
   ]
 }}
+
+If the user says that they have no other requests, tool calls don't need to be updated, then just return "DONE", no JSON.
 """
         
         # Call LLM to update tool calls

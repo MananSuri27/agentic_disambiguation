@@ -182,10 +182,13 @@ def run_simulation(
         user_intent=user_intent
     )
     
-    # Initialize conversation tracking
+    # Initialize conversation tracking - THE MASTER CONVERSATION
     conversation = []
     all_tool_calls = []
     all_execution_results = []
+    
+    # Avoid duplicate messages with a simple message ID system
+    seen_messages = set()
     
     # Add initial user query to conversation
     conversation.append({
@@ -208,15 +211,46 @@ def run_simulation(
         is_initial = (turn_count == 1)
         
         # Process the user input
+        logger.info(f"Processing user input: {current_user_input}")
         agent_response = agent.process_user_input(current_user_input, is_initial=is_initial)
         
-        # Add agent response to conversation
-        conversation.append(agent_response["agent_message"])
+        # Extract the agent message
+        agent_message = agent_response["agent_message"]
+        agent_message_text = agent_message["message"]
         
-        # If the agent is asking for clarification
-        if agent_response.get("requires_clarification", False):
-            # Get user response to clarification
-            user_response = user_simulator.get_response_to_question(agent_response["agent_message"]["message"])
+        # Add to conversation history (deduplicate by content)
+        message_id = hash(agent_message_text)
+        if message_id not in seen_messages:
+            seen_messages.add(message_id)
+            conversation.append(agent_message)
+            logger.info(f"Agent: {agent_message_text}")
+        else:
+            logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
+        
+        # Record the results
+        if "tool_calls" in agent_response and agent_response["tool_calls"]:
+            all_tool_calls.extend(agent_response["tool_calls"])
+        
+        if "execution_results" in agent_response and agent_response["execution_results"]:
+            all_execution_results.extend(agent_response["execution_results"])
+        
+        # Get the conversation status from the agent's response
+        conversation_status = agent_response.get("conversation_status", "awaiting_further_requests")
+        logger.info(f"Agent conversation status: {conversation_status}")
+        
+        if conversation_status == "awaiting_clarification":
+            # The agent needs clarification from the user
+            clarification_question = agent_message_text
+            logger.info(f"Agent needs clarification: {clarification_question}")
+            
+            # Get user response
+            user_response = user_simulator.get_response_to_question(clarification_question)
+            
+            # If user has no response (conversation complete), break the loop
+            if user_response is None:
+                logger.info("User simulator has no response to clarification request, ending conversation.")
+                break
+            
             logger.info(f"User response to clarification: {user_response}")
             
             # Add user response to conversation
@@ -227,39 +261,130 @@ def run_simulation(
             })
             
             # Process the clarification response
+            logger.info("Processing clarification response")
             clarification_response = agent.process_clarification_response(
                 user_response,
                 agent_response.get("potential_tool_calls", [])
             )
             
-            # Add agent response to conversation
-            conversation.append(clarification_response["agent_message"])
+            # Extract the agent response message
+            agent_message = clarification_response["agent_message"]
+            agent_message_text = agent_message["message"]
             
-            # Track tool calls and execution results
-            if "tool_calls" in clarification_response:
+            # Add to conversation history (deduplicate by content)
+            message_id = hash(agent_message_text)
+            if message_id not in seen_messages:
+                seen_messages.add(message_id)
+                conversation.append(agent_message)
+                logger.info(f"Agent (after clarification): {agent_message_text}")
+            else:
+                logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
+            
+            # Record the results
+            if "tool_calls" in clarification_response and clarification_response["tool_calls"]:
                 all_tool_calls.extend(clarification_response["tool_calls"])
-            if "execution_results" in clarification_response:
+            
+            if "execution_results" in clarification_response and clarification_response["execution_results"]:
                 all_execution_results.extend(clarification_response["execution_results"])
-        else:
-            # Track tool calls and execution results from direct processing
-            if "tool_calls" in agent_response:
-                all_tool_calls.extend(agent_response["tool_calls"])
-            if "execution_results" in agent_response:
-                all_execution_results.extend(agent_response["execution_results"])
+            
+            # Check if we need another clarification or can continue
+            next_status = clarification_response.get("conversation_status", "awaiting_further_requests")
         
-        # Check if the conversation should end
-        if agent.should_end_conversation() or turn_count >= max_turns:
-            logger.info("Agent indicated conversation should end or max turns reached.")
+                
+            # If we need another clarification, process this without continuing the loop
+            while next_status == "awaiting_clarification":
+                # Get the new clarification question
+                clarification_question = agent_message_text
+                logger.info(f"Additional clarification needed: {clarification_question}")
+                
+                # Get user response to this new clarification
+                user_response = user_simulator.get_response_to_question(clarification_question)
+                
+                # If user has no response, break both loops
+                if user_response is None:
+                    logger.info("User simulator has no response to clarification request, ending conversation.")
+                    break_outer = True
+                    break
+                    
+                logger.info(f"User response to additional clarification: {user_response}")
+                
+                # Add this user response to the conversation
+                conversation.append({
+                    "role": "user",
+                    "message": user_response,
+                    "type": "clarification_response"
+                })
+                
+                # Process this new clarification response
+                logger.info("Processing additional clarification response")
+                clarification_response = agent.process_clarification_response(
+                    user_response,
+                    clarification_response.get("potential_tool_calls", [])
+                )
+                
+                # Extract the agent response message
+                agent_message = clarification_response["agent_message"]
+                agent_message_text = agent_message["message"]
+                
+                # Add to conversation history
+                message_id = hash(agent_message_text)
+                if message_id not in seen_messages:
+                    seen_messages.add(message_id)
+                    conversation.append(agent_message)
+                    logger.info(f"Agent (after additional clarification): {agent_message_text}")
+                else:
+                    logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
+                
+                # Update results tracking
+                # [...]
+                
+                # Check if we need yet another clarification
+                next_status = clarification_response.get("conversation_status", "awaiting_further_requests")
+
+        
+        # Check if the last agent message contains an "anything else" question
+        # If so, use get_response_to_question which knows how to handle these specifically
+        if agent_message_text and user_simulator._is_follow_up_question(agent_message_text):
+            logger.info("Agent asked a follow-up question, handling with get_response_to_question")
+            user_response = user_simulator.get_response_to_question(agent_message_text)
+            
+            # If user has no more responses, add a closure message and end conversation
+            if user_response is None:
+                logger.info("User has no more requests, adding closure message")
+                
+                # Add closure message to conversation
+                closure_message = "No, that's all I needed. Thank you!"
+                conversation.append({
+                    "role": "user",
+                    "message": closure_message,
+                    "type": "follow_up"
+                })
+                logger.info(f"User closure message: {closure_message}")
+                
+                # End the conversation
+                break
+                
+            # Add follow-up to conversation
+            logger.info(f"User follow-up to 'anything else' question: {user_response}")
+            conversation.append({
+                "role": "user",
+                "message": user_response,
+                "type": "follow_up"
+            })
+            
+            # Update current user input for next loop
+            current_user_input = user_response
+            continue
+        
+        # Otherwise, use get_next_request to determine if user has a follow-up
+        next_user_input = user_simulator.get_next_request(conversation)
+        
+        # If user has no more requests, break the loop
+        if next_user_input is None:
+            logger.info("User simulator has no more requests, ending conversation.")
             break
         
-        # Get user's next request
-        next_user_input = user_simulator.get_next_request(agent.get_conversation_history())
-        
-        if next_user_input is None or next_user_input.strip() == "":
-            logger.info("User simulator has no more requests.")
-            break
-        
-        # Add follow-up request to conversation
+        # Otherwise, add follow-up request to conversation and continue
         logger.info(f"User follow-up request: {next_user_input}")
         conversation.append({
             "role": "user",
@@ -269,6 +394,11 @@ def run_simulation(
         
         # Update current user input for next loop
         current_user_input = next_user_input
+        
+        # Check if we've reached the maximum number of turns
+        if turn_count >= max_turns:
+            logger.info("Maximum number of turns reached.")
+            break
     
     # Prepare simulation result
     result = {
