@@ -30,7 +30,7 @@ class DocumentPlugin(BasePlugin):
     
     def _load_tool_definitions(self) -> List[Dict[str, Any]]:
         """Load tool definitions for PDF operations."""
-        # This is based on the PDF_TOOLS_CONFIG from config.py
+        # Complete list of tools from PDF_TOOLS_CONFIG
         return [
             {
                 "name": "duplicate",
@@ -198,6 +198,174 @@ class DocumentPlugin(BasePlugin):
                 ]
             },
             {
+                "name": "redact_text",
+                "description": "Redact specific text in a range of pages",
+                "arguments": [
+                    {
+                        "name": "start",
+                        "description": "Start page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "end",
+                        "description": "End page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "object_name",
+                        "description": "List of text to redact",
+                        "domain": {
+                            "type": "list",
+                            "importance": 0.9
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "overwrite",
+                        "description": "Whether to overwrite the original file",
+                        "domain": {
+                            "type": "boolean",
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "output_pathname",
+                        "description": "Name of the output file if not overwriting",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.7
+                        },
+                        "required": False,
+                        "default": None
+                    }
+                ]
+            },
+            {
+                "name": "highlight_text",
+                "description": "Highlight specific text in a range of pages",
+                "arguments": [
+                    {
+                        "name": "start",
+                        "description": "Start page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "end",
+                        "description": "End page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "object_name",
+                        "description": "List of text to highlight",
+                        "domain": {
+                            "type": "list",
+                            "importance": 0.9
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "overwrite",
+                        "description": "Whether to overwrite the original file",
+                        "domain": {
+                            "type": "boolean",
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "output_pathname",
+                        "description": "Name of the output file if not overwriting",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.7
+                        },
+                        "required": False,
+                        "default": None
+                    }
+                ]
+            },
+            {
+                "name": "underline_text",
+                "description": "Underline specific text in a range of pages",
+                "arguments": [
+                    {
+                        "name": "start",
+                        "description": "Start page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "end",
+                        "description": "End page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "object_name",
+                        "description": "List of text to underline",
+                        "domain": {
+                            "type": "list",
+                            "importance": 0.9
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "overwrite",
+                        "description": "Whether to overwrite the original file",
+                        "domain": {
+                            "type": "boolean",
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "output_pathname",
+                        "description": "Name of the output file if not overwriting",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.7
+                        },
+                        "required": False,
+                        "default": None
+                    }
+                ]
+            },
+            {
                 "name": "extract_pages",
                 "description": "Extract a range of pages to a new file",
                 "arguments": [
@@ -243,8 +411,212 @@ class DocumentPlugin(BasePlugin):
                         "default": None
                     }
                 ]
+            },
+            {
+                "name": "delete_page",
+                "description": "Delete a specific page",
+                "arguments": [
+                    {
+                        "name": "page_num",
+                        "description": "Page number to delete",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "overwrite",
+                        "description": "Whether to overwrite the original file",
+                        "domain": {
+                            "type": "boolean",
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "output_pathname",
+                        "description": "Name of the output file if not overwriting",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.7
+                        },
+                        "required": False,
+                        "default": None
+                    }
+                ]
+            },
+            {
+                "name": "delete_page_range",
+                "description": "Delete a range of pages",
+                "arguments": [
+                    {
+                        "name": "start",
+                        "description": "Start page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "end",
+                        "description": "End page number (inclusive)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "overwrite",
+                        "description": "Whether to overwrite the original file",
+                        "domain": {
+                            "type": "boolean",
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "output_pathname",
+                        "description": "Name of the output file if not overwriting",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.7
+                        },
+                        "required": False,
+                        "default": None
+                    }
+                ]
+            },
+            {
+                "name": "add_signature",
+                "description": "Add a signature to a page",
+                "arguments": [
+                    {
+                        "name": "page_num",
+                        "description": "Page number to add signature to",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.9,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "position",
+                        "description": "Position for the signature",
+                        "domain": {
+                            "type": "finite",
+                            "values": ["top-left", "top-middle", "top-right", "bottom-right", "bottom-left", "bottom-middle"],
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "overwrite",
+                        "description": "Whether to overwrite the original file",
+                        "domain": {
+                            "type": "boolean",
+                            "importance": 0.7
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "output_pathname",
+                        "description": "Name of the output file if not overwriting",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.7
+                        },
+                        "required": False,
+                        "default": None
+                    }
+                ]
+            },
+            {
+                "name": "add_page_with_text",
+                "description": "Add a new page with text content",
+                "arguments": [
+                    {
+                        "name": "text_content",
+                        "description": "Text content for the new page",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.9
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "font_size",
+                        "description": "Font size for the text",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [8, 72],
+                            "importance": 0.6
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "page_num",
+                        "description": "Page number to insert at (1-indexed)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [1, 1],  # Will be updated based on document
+                            "importance": 0.8,
+                            "data_dependent": True
+                        },
+                        "required": True
+                    }
+                ]
+            },
+            {
+                "name": "add_watermark",
+                "description": "Add a watermark to all pages",
+                "arguments": [
+                    {
+                        "name": "watermark_text",
+                        "description": "Text for the watermark",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.9
+                        },
+                        "required": True
+                    },
+                    {
+                        "name": "transparency",
+                        "description": "Transparency level (0-1)",
+                        "domain": {
+                            "type": "numeric_range",
+                            "values": [0.0, 1.0],
+                            "importance": 0.6
+                        },
+                        "required": True
+                    }
+                ]
+            },
+            {
+                "name": "add_password",
+                "description": "Password-protect the PDF",
+                "arguments": [
+                    {
+                        "name": "password",
+                        "description": "Password for protection",
+                        "domain": {
+                            "type": "string",
+                            "importance": 0.9
+                        },
+                        "required": True
+                    }
+                ]
             }
-            # Additional tools would continue here... but omitted for brevity
         ]
     
     def get_tools(self) -> List[Dict[str, Any]]:
@@ -309,21 +681,218 @@ class DocumentPlugin(BasePlugin):
                 }
             }
         
-        elif tool_name == "extract_pages":
-            start = parameters.get("start", 1)
-            end = parameters.get("end", 1)
-            output_pathname = parameters.get("output_pathname", "extracted.pdf")
-            
+        elif tool_name == "compress_file":
+            output_filename = parameters.get("output_filename", f"compressed_{self._current_context['pdf_name']}")
             return {
                 "success": True,
-                "message": f"Successfully extracted pages {start}-{end} to {output_pathname}",
+                "message": f"Successfully compressed {self._current_context['pdf_name']} to {output_filename}",
                 "output": {
                     "tool_name": tool_name,
                     "parameters": parameters
                 }
             }
         
-        # Handle other tools similarly
+        elif tool_name == "convert":
+            format_type = parameters.get("format", "")
+            output_filename = parameters.get("output_filename", "")
+            zip_output = parameters.get("zip", False)
+            
+            return {
+                "success": True,
+                "message": f"Successfully converted {self._current_context['pdf_name']} to {format_type} format as {output_filename}{' (zipped)' if zip_output else ''}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "add_comment":
+            page_num = parameters.get("page_num", 1)
+            coordinates = parameters.get("coordinates", [0, 0])
+            font_size = parameters.get("font_size", 12)
+            
+            return {
+                "success": True,
+                "message": f"Successfully added comment on page {page_num} at position {coordinates} with font size {font_size}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "redact_page_range":
+            start = parameters.get("start", 1)
+            end = parameters.get("end", 1)
+            
+            return {
+                "success": True,
+                "message": f"Successfully redacted content from pages {start}-{end}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "redact_text":
+            start = parameters.get("start", 1)
+            end = parameters.get("end", 1)
+            object_name = parameters.get("object_name", [])
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "redacted.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully redacted text {object_name} from pages {start}-{end} and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "highlight_text":
+            start = parameters.get("start", 1)
+            end = parameters.get("end", 1)
+            object_name = parameters.get("object_name", [])
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "highlighted.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully highlighted text {object_name} from pages {start}-{end} and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "underline_text":
+            start = parameters.get("start", 1)
+            end = parameters.get("end", 1)
+            object_name = parameters.get("object_name", [])
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "underlined.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully underlined text {object_name} from pages {start}-{end} and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "extract_pages":
+            start = parameters.get("start", 1)
+            end = parameters.get("end", 1)
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "extracted.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully extracted pages {start}-{end} and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "delete_page":
+            page_num = parameters.get("page_num", 1)
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "modified.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully deleted page {page_num} and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "delete_page_range":
+            start = parameters.get("start", 1)
+            end = parameters.get("end", 1)
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "modified.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully deleted pages {start}-{end} and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "add_signature":
+            page_num = parameters.get("page_num", 1)
+            position = parameters.get("position", "bottom-right")
+            overwrite = parameters.get("overwrite", False)
+            output_pathname = parameters.get("output_pathname", "signed.pdf")
+            
+            output_msg = f"to {output_pathname}" if not overwrite else "in place"
+            
+            return {
+                "success": True,
+                "message": f"Successfully added signature to page {page_num} at {position} position and saved {output_msg}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "add_page_with_text":
+            text_content = parameters.get("text_content", "")
+            font_size = parameters.get("font_size", 12)
+            page_num = parameters.get("page_num", 1)
+            
+            return {
+                "success": True,
+                "message": f"Successfully added new page with text at position {page_num} with font size {font_size}",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "add_watermark":
+            watermark_text = parameters.get("watermark_text", "")
+            transparency = parameters.get("transparency", 0.5)
+            
+            return {
+                "success": True,
+                "message": f"Successfully added watermark '{watermark_text}' with transparency {transparency} to all pages",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
+        elif tool_name == "add_password":
+            password = parameters.get("password", "")
+            
+            return {
+                "success": True,
+                "message": f"Successfully password-protected the PDF with the provided password",
+                "output": {
+                    "tool_name": tool_name,
+                    "parameters": parameters
+                }
+            }
+        
         # Default case for tools not explicitly handled
         return {
             "success": True,

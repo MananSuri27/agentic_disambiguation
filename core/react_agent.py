@@ -18,11 +18,15 @@ class AgentContext:
         self.tool_calls = []  # Current planned tool calls
         self.conversation_history = []  # Conversation history
         self.current_reasoning = ""  # Latest reasoning
+        self.all_reasoning_history = []  # Track all reasoning outputs
         self.turn_count = 0  # Track conversation turns
         self.last_question = None  # Last clarification question asked
         self.should_end_flag = False  # Flag to indicate if conversation should end
         self.executed_tool_calls = set()  # Set of tool calls that have been executed (to prevent duplication)
         self.current_task_complete = False  # Flag to track if the current task is complete
+        
+        # Track all tool call attempts (both succeeded and failed)
+        self.all_tool_call_attempts = []
 
 
 class ReactAgent:
@@ -114,11 +118,35 @@ class ReactAgent:
         # REASON phase - analyze what tools are needed
         tool_calls, reasoning = self._reason(user_input)
         self.context.current_reasoning = reasoning
+        self.context.all_reasoning_history.append({
+            "turn": self.context.turn_count,
+            "user_input": user_input,
+            "reasoning": reasoning
+        })
         self.context.tool_calls = tool_calls
         
         logger.info(f"Reasoning complete. Tool calls planned: {len(tool_calls)}")
         for tc in tool_calls:
             logger.debug(f"  - Tool: {tc.tool_name}, Args: {tc.arguments}")
+            
+        # If no tool calls were identified, log a warning and return a proper response
+        if not tool_calls:
+            logger.warning(f"No tool calls identified for input: '{user_input}'")
+            return {
+                "agent_message": {
+                    "role": "agent",
+                    "message": "I don't have the right tools to process your request. Could you please provide more details or try a different request?",
+                    "type": "error_response"
+                },
+                "tool_calls": [],
+                "execution_results": [],
+                "reasoning": reasoning,
+                "all_reasoning_history": self.context.all_reasoning_history,
+                "requires_clarification": False,
+                "success": False,
+                "conversation_status": "awaiting_clarification",
+                "all_tool_call_attempts": self.context.all_tool_call_attempts
+            }
         
         # Calculate uncertainty
         overall_certainty, arg_certainties = self.uncertainty_calculator.calculate_sequence_certainty(tool_calls)
@@ -159,28 +187,45 @@ class ReactAgent:
         
         # Create a unique signature for each tool call to prevent duplicate execution
         new_tool_calls = []
+        duplicate_calls = []
         for tc in tool_calls:
             tc_signature = f"{tc.tool_name}:{sorted([(k, v) for k, v in tc.arguments.items()])}"
             if tc_signature not in self.context.executed_tool_calls:
                 new_tool_calls.append(tc)
                 self.context.executed_tool_calls.add(tc_signature)
+                # Add to the context's all tool call attempts
+                self.context.all_tool_call_attempts.append({
+                    "tool_call": tc.to_dict(),
+                    "was_executed": True,
+                    "reason": "new tool call"
+                })
             else:
                 logger.warning(f"Skipping duplicate tool call: {tc.tool_name}")
+                duplicate_calls.append(tc)
+                # Add to the context's all tool call attempts
+                self.context.all_tool_call_attempts.append({
+                    "tool_call": tc.to_dict(),
+                    "was_executed": False,
+                    "reason": "duplicate"
+                })
                 
         # If no new tool calls, log a warning and return a response indicating this
         if not new_tool_calls and tool_calls:
-            logger.warning("No new tool calls to execute - possible duplicate execution attempt")
+            logger.warning("No new tool calls to execute - all were duplicates")
             return {
                 "agent_message": {
                     "role": "agent",
-                    "message": "I've already processed this request.",
+                    "message": "I've already processed this request previously. Did you want me to try something different?",
                     "type": "action_response"
                 },
-                "tool_calls": [],
+                "tool_calls": [tc.to_dict() for tc in duplicate_calls],
                 "execution_results": [],
+                "reasoning": reasoning,
+                "all_reasoning_history": self.context.all_reasoning_history,
                 "requires_clarification": False,
                 "success": True,
-                "conversation_status": "awaiting_further_requests"
+                "conversation_status": "awaiting_further_requests",
+                "all_tool_call_attempts": self.context.all_tool_call_attempts
             }
         
         # Execute the new tool calls (or none if empty list)
@@ -348,7 +393,6 @@ Return your response as a JSON object with the following structure:
                 observation_results["all_succeeded"] = False
                 
                 # Check for validation failures or missing parameters - these ALWAYS need clarification
-                # The key check was missing here!
                 if (result.error in ["MISSING_PARAMS", "INVALID_PARAM_VALUE"] or 
                     "validation failed" in result.message.lower() or 
                     "required argument" in result.message.lower() or
@@ -396,7 +440,9 @@ Return your response as a JSON object with the following structure:
             "requires_clarification": True,
             "potential_tool_calls": [tc.to_dict() for tc in self.context.tool_calls],
             "reasoning": self.context.current_reasoning,
-            "conversation_status": "awaiting_clarification"
+            "all_reasoning_history": self.context.all_reasoning_history,
+            "conversation_status": "awaiting_clarification",
+            "all_tool_call_attempts": self.context.all_tool_call_attempts
         }
     
     def _handle_tool_failures_with_clarification(self, failures: List[ToolExecutionResult]) -> Dict[str, Any]:
@@ -421,7 +467,6 @@ Return your response as a JSON object with the following structure:
                 last_user_message = turn.get("message", "")
                 break
         
-        # Instead of using _generate_error_resolution, directly use LLM to generate question
         # Generate a clarification question based on the error
         prompt = f"""
 You are an AI assistant helping a user with a task.
@@ -485,7 +530,10 @@ Your question should be specific, helpful, and focus on resolving the error.
             "execution_results": [result.to_dict() for result in failures],
             "requires_clarification": False,
             "success": False,
-            "conversation_status": "awaiting_clarification"  # Still need clarification even though not using formal mechanism
+            "reasoning": self.context.current_reasoning,
+            "all_reasoning_history": self.context.all_reasoning_history,
+            "conversation_status": "awaiting_clarification",  # Still need clarification even though not using formal mechanism
+            "all_tool_call_attempts": self.context.all_tool_call_attempts
         }
     
     def _generate_error_resolution(self, error_result: ToolExecutionResult, user_query: str) -> Tuple[str, List[ToolCall]]:
@@ -594,6 +642,26 @@ Return your response as a JSON object with the following structure:
         
         logger.info(f"Generating response for {len(successful_executions)} successful and {len(failures)} failed executions")
         
+        # If no executions happened at all, be explicit about it
+        if not all_results:
+            response_text = "I wasn't able to process your request. No tools were executed."
+            agent_message = {
+                "role": "agent",
+                "message": response_text,
+                "type": "error_response"  # New type for clarity
+            }
+            return {
+                "agent_message": agent_message,
+                "tool_calls": [],
+                "execution_results": [],
+                "requires_clarification": False,
+                "success": False,
+                "reasoning": self.context.current_reasoning,
+                "all_reasoning_history": self.context.all_reasoning_history,
+                "conversation_status": "awaiting_clarification",
+                "all_tool_call_attempts": self.context.all_tool_call_attempts
+            }
+        
         # Build a simple response
         response_parts = []
         
@@ -617,8 +685,11 @@ Return your response as a JSON object with the following structure:
                     # For non-dictionary outputs
                     output_str = f" Output: {execution.output}."
             
-            # Simple generic template with output included
-            response_parts.append(f"I've executed the {tool_name} operation successfully.{output_str}")
+            # Include the message from the execution
+            tool_message = execution.message if hasattr(execution, 'message') else ""
+            
+            # Simple generic template with output and message included
+            response_parts.append(f"I've executed the {tool_name} operation successfully. {tool_message}{output_str}")
         
         # Add failure messages
         for execution in failures:
@@ -657,7 +728,10 @@ Return your response as a JSON object with the following structure:
             "execution_results": [result.to_dict() for result in all_results],
             "requires_clarification": False,
             "success": all_succeeded,
-            "conversation_status": "awaiting_further_requests"  # Signal that we're ready for new requests
+            "reasoning": self.context.current_reasoning,
+            "all_reasoning_history": self.context.all_reasoning_history,
+            "conversation_status": "awaiting_further_requests",  # Signal that we're ready for new requests
+            "all_tool_call_attempts": self.context.all_tool_call_attempts
         }
     
     def process_clarification_response(self, user_response: str, previous_tool_calls: List[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -714,13 +788,27 @@ Return your response as a JSON object with the following structure:
         
         # Create a unique signature for each tool call to prevent duplicate execution
         new_tool_calls = []
+        duplicate_calls = []
         for tc in updated_tool_calls:
             tc_signature = f"{tc.tool_name}:{sorted([(k, v) for k, v in tc.arguments.items()])}"
             if tc_signature not in self.context.executed_tool_calls:
                 new_tool_calls.append(tc)
                 self.context.executed_tool_calls.add(tc_signature)
+                # Add to the context's all tool call attempts
+                self.context.all_tool_call_attempts.append({
+                    "tool_call": tc.to_dict(),
+                    "was_executed": True,
+                    "reason": "new tool call after clarification"
+                })
             else:
-                logger.warning(f"Skipping duplicate tool call: {tc.tool_name}")
+                logger.warning(f"Skipping duplicate tool call after clarification: {tc.tool_name}")
+                duplicate_calls.append(tc)
+                # Add to the context's all tool call attempts
+                self.context.all_tool_call_attempts.append({
+                    "tool_call": tc.to_dict(),
+                    "was_executed": False,
+                    "reason": "duplicate after clarification"
+                })
         
         # If no new tool calls, just return a response
         if not new_tool_calls and updated_tool_calls:
@@ -728,14 +816,17 @@ Return your response as a JSON object with the following structure:
             return {
                 "agent_message": {
                     "role": "agent",
-                    "message": "I've already processed this request.",
+                    "message": "I've already processed a similar request. Did you want me to try something different?",
                     "type": "action_response"
                 },
-                "tool_calls": [],
+                "tool_calls": [tc.to_dict() for tc in duplicate_calls],
                 "execution_results": [],
                 "requires_clarification": False,
                 "success": True,
-                "conversation_status": "awaiting_further_requests"
+                "reasoning": self.context.current_reasoning,
+                "all_reasoning_history": self.context.all_reasoning_history,
+                "conversation_status": "awaiting_further_requests",
+                "all_tool_call_attempts": self.context.all_tool_call_attempts
             }
         
         # Execute the new tool calls with updated information
@@ -759,6 +850,7 @@ Return your response as a JSON object with the following structure:
         
         # Generate response based on execution results
         return self._generate_response(observation_results)
+    
     def _format_conversation_history(self) -> str:
         """Format conversation history for inclusion in prompts."""
         if not self.context.conversation_history:
