@@ -257,36 +257,36 @@ class QuestionGenerator:
             formatted_history = f"Conversation history:\n{formatted_history}\n\n"
             
         # Get the first tool call to determine which plugin to use
-        if tool_calls:
-            first_tool = tool_calls[0].get("tool_name", "")
-            plugin = self.plugin_manager.get_plugin_for_tool(first_tool)
+        # if tool_calls:
+        #     first_tool = tool_calls[0].get("tool_name", "")
+        #     plugin = self.plugin_manager.get_plugin_for_tool(first_tool)
             
-            if plugin:
-                # Use plugin-specific template if available
-                templates = plugin.get_prompt_templates()
-                if "question_generation" in templates:
-                    template = templates["question_generation"]
+        #     if plugin:
+        #         # Use plugin-specific template if available
+        #         templates = plugin.get_prompt_templates()
+        #         if "question_generation" in templates:
+        #             template = templates["question_generation"]
                     
-                    # If the template doesn't have a placeholder for conversation history, add it
-                    if "{conversation_history}" not in template:
-                        template = formatted_history + template
+        #             # If the template doesn't have a placeholder for conversation history, add it
+        #             if "{conversation_history}" not in template:
+        #                 template = formatted_history + template
                     
-                    # If the template doesn't have a placeholder for tool documentation, add it
-                    if "{tool_documentation}" not in template:
-                        # Find a good place to insert it - after tool_calls and before instructions
-                        if "Uncertain Arguments:" in template:
-                            template = template.replace(
-                                "Uncertain Arguments:",
-                                "Detailed Tool Documentation:\n{tool_documentation}\n\nUncertain Arguments:"
-                            )
+        #             # If the template doesn't have a placeholder for tool documentation, add it
+        #             if "{tool_documentation}" not in template:
+        #                 # Find a good place to insert it - after tool_calls and before instructions
+        #                 if "Uncertain Arguments:" in template:
+        #                     template = template.replace(
+        #                         "Uncertain Arguments:",
+        #                         "Detailed Tool Documentation:\n{tool_documentation}\n\nUncertain Arguments:"
+        #                     )
                         
-                    return template.format(
-                        user_query=user_query,
-                        tool_calls=tool_calls,
-                        uncertain_args=uncertain_args,
-                        conversation_history=formatted_history,
-                        tool_documentation=tool_documentation
-                    )
+        #             return template.format(
+        #                 user_query=user_query,
+        #                 tool_calls=tool_calls,
+        #                 uncertain_args=uncertain_args,
+        #                 conversation_history=formatted_history,
+        #                 tool_documentation=tool_documentation
+        #             )
         
         # Fall back to default template if no plugin-specific one is available
         default_template = """

@@ -32,3 +32,5 @@ visualization_*/
 multi_alpha_grid*.png
 analyze_hyperparameters.py
 
+tests/
+

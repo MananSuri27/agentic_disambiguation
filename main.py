@@ -10,6 +10,7 @@ import copy
 import uuid
 import json
 import sys
+import traceback
 from typing import Dict, List, Any, Optional, Tuple
 
 # Add the project root to the Python path
@@ -58,7 +59,7 @@ def initialize_llm_provider(llm_config: Dict[str, Any]) -> LLMProvider:
         # Default to Ollama
         return OllamaProvider()
 
-def initialize_components(active_plugins: List[str]) -> Tuple[PluginManager, ToolRegistry, LLMProvider, UncertaintyCalculator, QuestionGenerator]:
+def initialize_components(active_plugins: List[str], simulation_data: Optional[Dict[str, Any]] = None) -> Tuple[PluginManager, ToolRegistry, LLMProvider, UncertaintyCalculator, QuestionGenerator]:
     """
     Initialize system components.
     
@@ -74,11 +75,32 @@ def initialize_components(active_plugins: List[str]) -> Tuple[PluginManager, Too
     # Load the specified plugins
     for plugin_name in active_plugins:
         success = plugin_manager.load_plugin(plugin_name)
-        if not success and plugin_name == "document":
-            # If loading from config fails, try registering the document plugin directly
-            from plugins.document_plugin import DocumentPlugin
-            plugin = DocumentPlugin()
-            plugin_manager.register_plugin(plugin)
+        # if not success and plugin_name == "document":
+        #     # If loading from config fails, try registering the document plugin directly
+        #     from plugins.document_plugin import DocumentPlugin
+        #     plugin = DocumentPlugin()
+        #     plugin_manager.register_plugin(plugin)
+    
+    # Initialize plugins from initial_config if provided
+    if simulation_data and "initial_config" in simulation_data:
+        for plugin_name in simulation_data["initial_config"].keys():
+            if plugin_name not in plugin_manager.plugins and plugin_name not in active_plugins:
+                success = plugin_manager.load_plugin(plugin_name)
+                if success:
+                    logger.info(f"Loaded plugin {plugin_name} from initial_config")
+                    # If plugin supports initialization from config, initialize it
+                    plugin = plugin_manager.get_plugin(plugin_name)
+                    if hasattr(plugin, "initialize_from_config"):
+                        plugin.initialize_from_config(simulation_data["initial_config"])
+                        logger.info(f"Initialized {plugin_name} from config")
+                else:
+                    logger.warning(f"Failed to load plugin {plugin_name} from initial_config")
+            elif plugin_name in plugin_manager.plugins:
+                # Plugin already loaded but might need initialization
+                plugin = plugin_manager.get_plugin(plugin_name)
+                if hasattr(plugin, "initialize_from_config"):
+                    plugin.initialize_from_config(simulation_data["initial_config"])
+                    logger.info(f"Initialized {plugin_name} from config")
     
     # Initialize the tool registry with the plugin manager
     tool_registry = ToolRegistry(plugin_manager)
@@ -156,6 +178,10 @@ def run_simulation(
         k: v for k, v in simulation_data.items() 
         if k not in ["user_query", "user_intent", "ground_truth_tool_calls", "potential_follow_ups"]
     }
+
+    # If we have an initial_config, make sure it's included in the context
+    if "initial_config" in simulation_data and "initial_config" not in context:
+        context["initial_config"] = simulation_data["initial_config"]
     
     # Update tool registry with data-dependent domains
     tool_registry.update_domain_from_data(context)
@@ -443,6 +469,7 @@ def run_simulation(
             print(visualizer.visualize_metrics(result["evaluation"]))
         print("\n" + "="*80)
     
+    
     return result
 
 
@@ -452,7 +479,7 @@ def main():
     parser.add_argument("--data", type=str, help="Path to simulation data file")
     parser.add_argument("--verbose", action="store_true", help="Print verbose output")
     parser.add_argument("--output", type=str, help="Path to output file")
-    parser.add_argument("--plugins", type=str, default="document", 
+    parser.add_argument("--plugins", type=str, default="gfs", 
                         help="Comma-separated list of plugins to activate (default: document)")
     args = parser.parse_args()
     
@@ -466,9 +493,7 @@ def main():
     # Parse the plugins argument
     active_plugins = [p.strip() for p in args.plugins.split(",")]
     
-    # Initialize components
-    plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator = \
-        initialize_components(active_plugins)
+    
     
     # Load simulation data
     data_loader = SimulationDataLoader(config.SIMULATION_CONFIG.get("data_dir", "simulation_data"))
@@ -477,6 +502,10 @@ def main():
         # Run single simulation
         try:
             simulation_data = data_loader.load_simulation_data(args.data)
+
+            # Initialize components with simulation data for plugin initialization
+            plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator = \
+                initialize_components(active_plugins, simulation_data)
             
             # Run simulation
             result = run_simulation(
@@ -554,6 +583,10 @@ def main():
             
             try:
                 simulation_data = data_loader.load_simulation_data(file_path)
+
+                # Initialize components with simulation data for plugin initialization
+                plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator = \
+                    initialize_components(active_plugins, simulation_data)
                 
                 # Run simulation
                 result = run_simulation(
