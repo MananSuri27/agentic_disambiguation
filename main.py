@@ -82,25 +82,25 @@ def initialize_components(active_plugins: List[str], simulation_data: Optional[D
         #     plugin_manager.register_plugin(plugin)
     
     # Initialize plugins from initial_config if provided
-    if simulation_data and "initial_config" in simulation_data:
-        for plugin_name in simulation_data["initial_config"].keys():
-            if plugin_name not in plugin_manager.plugins and plugin_name not in active_plugins:
-                success = plugin_manager.load_plugin(plugin_name)
-                if success:
-                    logger.info(f"Loaded plugin {plugin_name} from initial_config")
-                    # If plugin supports initialization from config, initialize it
-                    plugin = plugin_manager.get_plugin(plugin_name)
-                    if hasattr(plugin, "initialize_from_config"):
-                        plugin.initialize_from_config(simulation_data["initial_config"])
-                        logger.info(f"Initialized {plugin_name} from config")
-                else:
-                    logger.warning(f"Failed to load plugin {plugin_name} from initial_config")
-            elif plugin_name in plugin_manager.plugins:
-                # Plugin already loaded but might need initialization
-                plugin = plugin_manager.get_plugin(plugin_name)
-                if hasattr(plugin, "initialize_from_config"):
-                    plugin.initialize_from_config(simulation_data["initial_config"])
-                    logger.info(f"Initialized {plugin_name} from config")
+    # if simulation_data and "initial_config" in simulation_data:
+    #     for plugin_name in simulation_data["initial_config"].keys():
+    #         if plugin_name not in plugin_manager.plugins and plugin_name not in active_plugins:
+    #             success = plugin_manager.load_plugin(plugin_name)
+    #             if success:
+    #                 logger.info(f"Loaded plugin {plugin_name} from initial_config")
+    #                 # If plugin supports initialization from config, initialize it
+    #                 plugin = plugin_manager.get_plugin(plugin_name)
+    #                 if hasattr(plugin, "initialize_from_config"):
+    #                     plugin.initialize_from_config(simulation_data["initial_config"])
+    #                     logger.info(f"Initialized {plugin_name} from config")
+    #             else:
+    #                 logger.warning(f"Failed to load plugin {plugin_name} from initial_config")
+    #         elif plugin_name in plugin_manager.plugins:
+    #             # Plugin already loaded but might need initialization
+    #             plugin = plugin_manager.get_plugin(plugin_name)
+    #             if hasattr(plugin, "initialize_from_config"):
+    #                 plugin.initialize_from_config(simulation_data["initial_config"])
+    #                 logger.info(f"Initialized {plugin_name} from config")
     
     # Initialize the tool registry with the plugin manager
     tool_registry = ToolRegistry(plugin_manager)
@@ -479,7 +479,7 @@ def main():
     parser.add_argument("--data", type=str, help="Path to simulation data file")
     parser.add_argument("--verbose", action="store_true", help="Print verbose output")
     parser.add_argument("--output", type=str, help="Path to output file")
-    parser.add_argument("--plugins", type=str, default="gfs", 
+    parser.add_argument("--plugins", type=str, default="travel", 
                         help="Comma-separated list of plugins to activate (default: document)")
     args = parser.parse_args()
     

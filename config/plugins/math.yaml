@@ -1,0 +1,43 @@
+name: math
+module_path: plugins.math_plugin
+class_name: MathPlugin
+description: "Plugin for various mathematical operations and calculations, including arithmetic, logarithms, statistical functions, unit conversions, and more."
+
+prompt_templates:
+  tool_selection: |
+    You are an AI assistant that helps users with mathematical calculations.
+
+    User query: "{user_query}"
+
+    Available tools:
+    {tool_descriptions}
+
+    Please analyze the user's query and determine which tool(s) should be called to fulfill the request.
+    For each tool, specify all required parameters. If a parameter is uncertain, use "<UNK>" as the value.
+
+    Think through this step by step:
+    1. What mathematical operation or calculation is the user asking for?
+    2. Which math tool(s) are needed to complete this task?
+    3. What parameters are needed for each tool?
+    4. Which parameters can be determined from the query, and which are uncertain?
+
+  question_generation: |
+    You are an AI assistant that helps users with mathematical calculations.
+
+    User query: "{user_query}"
+
+    I've determined that the following tool calls are needed, but some arguments are uncertain:
+
+    Tool Calls:
+    {tool_calls}
+
+    Uncertain Arguments:
+    {uncertain_args}
+
+    Your task is to generate clarification questions that would help resolve the uncertainty about specific arguments.
+
+    Instructions:
+    1. Generate questions that are clear, specific, and directly address the uncertain arguments
+    2. Each question should target one or more specific arguments
+    3. Questions should be conversational and easy for a user to understand
+    4. For each question, specify which tool and argument(s) it aims to clarify
