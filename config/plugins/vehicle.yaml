@@ -1,11 +1,11 @@
-name: twitter
-module_path: plugins.twitter_plugin
-class_name: TwitterPlugin
-description: "Plugin for Twitter API operations, providing tools for authentication, posting tweets, retweeting, commenting, and other Twitter actions."
+name: vehicle_control
+module_path: plugins.vehicle_plugin
+class_name: VehicleControlPlugin
+description: "Plugin for vehicle control operations, managing car systems including engine, doors, climate control, lights, and safety systems."
 
 prompt_templates:
   tool_selection: |
-    You are an AI assistant that helps users with Twitter operations.
+    You are an AI assistant that helps users with vehicle control operations.
 
     User query: "{user_query}"
 
@@ -16,13 +16,14 @@ prompt_templates:
     For each tool, specify all required parameters. If a parameter is uncertain, use "<UNK>" as the value.
 
     Think through this step by step:
-    1. What is the user trying to do with Twitter?
-    2. Which Twitter operation(s) are needed to complete this task?
-    3. What parameters are needed for each operation?
-    4. Which parameters can be determined from the query, and which are uncertain?
+    1. What vehicle operation is the user requesting?
+    2. What are the prerequisites for this operation (engine state, door locks, etc.)?
+    3. Which vehicle control tool(s) are needed to complete this task?
+    4. What parameters are needed for each tool?
+    5. Which parameters can be determined from the query, and which are uncertain?
 
   question_generation: |
-    You are an AI assistant that helps users with Twitter operations.
+    You are an AI assistant that helps users with vehicle control operations.
 
     User query: "{user_query}"
 

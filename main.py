@@ -59,12 +59,102 @@ def initialize_llm_provider(llm_config: Dict[str, Any]) -> LLMProvider:
         # Default to Ollama
         return OllamaProvider()
 
-def initialize_components(active_plugins: List[str], simulation_data: Optional[Dict[str, Any]] = None) -> Tuple[PluginManager, ToolRegistry, LLMProvider, UncertaintyCalculator, QuestionGenerator]:
+def determine_plugin_from_simulation_data(simulation_data: Dict[str, Any]) -> Optional[str]:
     """
-    Initialize system components.
+    Determine which plugin to load based on the simulation data.
     
     Args:
-        active_plugins: List of plugin names to activate
+        simulation_data: The simulation data dictionary
+        
+    Returns:
+        Plugin name to load, or None if can't determine
+    """
+    # Check for explicit primary_api field
+    if "primary_api" in simulation_data:
+        api_name = simulation_data["primary_api"]
+        # Map API names to plugin names
+        api_to_plugin = {
+            "GorillaFileSystem": "gfs",
+            "TravelAPI": "travel", 
+            "TradingBot": "trading",
+            "VehicleControlAPI": "vehicle_control",
+            "DocumentPlugin": "document"
+        }
+        return api_to_plugin.get(api_name)
+    
+    # # Check initial_config for API types
+    # if "initial_config" in simulation_data:
+    #     config = simulation_data["initial_config"]
+    #     if "GorillaFileSystem" in config:
+    #         return "gfs"
+    #     elif "TravelAPI" in config:
+    #         return "travel"
+    #     elif "TradingBot" in config:
+    #         return "trading"
+    #     elif "VehicleControlAPI" in config:
+    #         return "vehicle_control"
+    #     elif "DocumentPlugin" in config:
+    #         return "document"
+    
+    # # Check ground truth tool calls to infer plugin
+    # if "ground_truth_tool_calls" in simulation_data:
+    #     tool_calls = simulation_data["ground_truth_tool_calls"]
+    #     if tool_calls:
+    #         # Extract tool names and try to map to plugins
+    #         tool_names = {call.get("tool_name", "") for call in tool_calls}
+            
+    #         # GFS tools
+    #         gfs_tools = {"pwd", "ls", "cd", "mkdir", "touch", "echo", "cat", "find", 
+    #                     "wc", "sort", "grep", "du", "tail", "diff", "mv", "rm", "rmdir", "cp"}
+    #         if tool_names.intersection(gfs_tools):
+    #             return "gfs"
+            
+    #         # Travel tools
+    #         travel_tools = {"get_budget_fiscal_year", "register_credit_card", "get_flight_cost", 
+    #                        "get_credit_card_balance", "book_flight", "retrieve_invoice", "list_all_airports",
+    #                        "cancel_booking", "compute_exchange_rate", "verify_traveler_information",
+    #                        "set_budget_limit", "get_nearest_airport_by_city", "purchase_insurance",
+    #                        "contact_customer_support", "get_all_credit_cards"}
+    #         if tool_names.intersection(travel_tools):
+    #             return "travel"
+            
+    #         # Trading tools
+    #         trading_tools = {"get_current_time", "update_market_status", "get_symbol_by_name",
+    #                         "get_stock_info", "get_order_details", "cancel_order", "place_order",
+    #                         "make_transaction", "get_account_info", "fund_account", "remove_stock_from_watchlist",
+    #                         "get_watchlist", "get_order_history", "get_transaction_history", "update_stock_price",
+    #                         "get_available_stocks", "filter_stocks_by_price", "add_to_watchlist", "notify_price_change"}
+    #         if tool_names.intersection(trading_tools):
+    #             return "trading"
+            
+    #         # Vehicle tools
+    #         vehicle_tools = {"startEngine", "fillFuelTank", "lockDoors", "adjustClimateControl",
+    #                         "get_outside_temperature_from_google", "get_outside_temperature_from_weather_com",
+    #                         "setHeadlights", "displayCarStatus", "activateParkingBrake", "pressBrakePedal",
+    #                         "releaseBrakePedal", "setCruiseControl", "get_current_speed", "display_log",
+    #                         "estimate_drive_feasibility_by_mileage", "liter_to_gallon", "gallon_to_liter",
+    #                         "estimate_distance", "get_zipcode_based_on_city", "set_navigation",
+    #                         "check_tire_pressure", "find_nearest_tire_shop"}
+    #         if tool_names.intersection(vehicle_tools):
+    #             return "vehicle_control"
+            
+    #         # Document tools
+    #         document_tools = {"duplicate", "rename", "search", "count_pages", "compress_file", "convert",
+    #                          "add_comment", "redact_page_range", "redact_text", "highlight_text", "underline_text",
+    #                          "extract_pages", "delete_page", "delete_page_range", "add_signature",
+    #                          "add_page_with_text", "add_watermark", "add_password"}
+    #         if tool_names.intersection(document_tools):
+    #             return "document"
+    
+    return None
+
+def initialize_components(plugin_name: str, simulation_data: Optional[Dict[str, Any]] = None) -> Tuple[PluginManager, ToolRegistry, LLMProvider, UncertaintyCalculator, QuestionGenerator]:
+    """
+    Initialize system components with the specified plugin.
+    
+    Args:
+        plugin_name: Name of the plugin to load
+        simulation_data: Optional simulation data for initialization
         
     Returns:
         Tuple of (plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator)
@@ -72,35 +162,40 @@ def initialize_components(active_plugins: List[str], simulation_data: Optional[D
     # Initialize the plugin manager
     plugin_manager = PluginManager(plugin_config_dir="config/plugins")
     
-    # Load the specified plugins
-    for plugin_name in active_plugins:
-        success = plugin_manager.load_plugin(plugin_name)
-        # if not success and plugin_name == "document":
-        #     # If loading from config fails, try registering the document plugin directly
-        #     from plugins.document_plugin import DocumentPlugin
-        #     plugin = DocumentPlugin()
-        #     plugin_manager.register_plugin(plugin)
+    # Load the specified plugin
+    success = plugin_manager.load_plugin(plugin_name)
+    if not success:
+        logger.warning(f"Failed to load plugin {plugin_name} from config, trying direct import")
+        # Try loading plugin directly based on name
+        if plugin_name == "gfs":
+            from plugins.gfs_plugin import GFSPlugin
+            plugin = GFSPlugin()
+            plugin_manager.register_plugin(plugin)
+        elif plugin_name == "travel":
+            from plugins.travel_plugin import TravelPlugin
+            plugin = TravelPlugin()
+            plugin_manager.register_plugin(plugin)
+        elif plugin_name == "trading":
+            from plugins.trading_plugin import TradingPlugin
+            plugin = TradingPlugin()
+            plugin_manager.register_plugin(plugin)
+        elif plugin_name == "vehicle_control":
+            from plugins.vehicle_plugin import VehicleControlPlugin
+            plugin = VehicleControlPlugin()
+            plugin_manager.register_plugin(plugin)
+        elif plugin_name == "document":
+            from plugins.document_plugin import DocumentPlugin
+            plugin = DocumentPlugin()
+            plugin_manager.register_plugin(plugin)
+        else:
+            raise ValueError(f"Unknown plugin: {plugin_name}")
     
-    # Initialize plugins from initial_config if provided
-    # if simulation_data and "initial_config" in simulation_data:
-    #     for plugin_name in simulation_data["initial_config"].keys():
-    #         if plugin_name not in plugin_manager.plugins and plugin_name not in active_plugins:
-    #             success = plugin_manager.load_plugin(plugin_name)
-    #             if success:
-    #                 logger.info(f"Loaded plugin {plugin_name} from initial_config")
-    #                 # If plugin supports initialization from config, initialize it
-    #                 plugin = plugin_manager.get_plugin(plugin_name)
-    #                 if hasattr(plugin, "initialize_from_config"):
-    #                     plugin.initialize_from_config(simulation_data["initial_config"])
-    #                     logger.info(f"Initialized {plugin_name} from config")
-    #             else:
-    #                 logger.warning(f"Failed to load plugin {plugin_name} from initial_config")
-    #         elif plugin_name in plugin_manager.plugins:
-    #             # Plugin already loaded but might need initialization
-    #             plugin = plugin_manager.get_plugin(plugin_name)
-    #             if hasattr(plugin, "initialize_from_config"):
-    #                 plugin.initialize_from_config(simulation_data["initial_config"])
-    #                 logger.info(f"Initialized {plugin_name} from config")
+    # Initialize plugin from simulation data if available
+    if simulation_data and "initial_config" in simulation_data:
+        plugin = plugin_manager.get_plugin(plugin_name)
+        if plugin and hasattr(plugin, "initialize_from_config"):
+            plugin.initialize_from_config(simulation_data["initial_config"])
+            logger.info(f"Initialized {plugin_name} from config")
     
     # Initialize the tool registry with the plugin manager
     tool_registry = ToolRegistry(plugin_manager)
@@ -170,13 +265,13 @@ def run_simulation(
     """
     # Extract simulation data
     user_query = simulation_data.get("user_query", "")
-    user_intent = simulation_data.get("user_intent", "")
+    user_intent = simulation_data.get("user_intention", "")
     ground_truth = simulation_data
     
     # Extract API-specific context and pass it to the relevant plugins
     context = {
         k: v for k, v in simulation_data.items() 
-        if k not in ["user_query", "user_intent", "ground_truth_tool_calls", "potential_follow_ups"]
+        if k not in ["user_query", "user_intention", "ground_truth_tool_calls", "follow_ups"]
     }
 
     # If we have an initial_config, make sure it's included in the context
@@ -479,8 +574,6 @@ def main():
     parser.add_argument("--data", type=str, help="Path to simulation data file")
     parser.add_argument("--verbose", action="store_true", help="Print verbose output")
     parser.add_argument("--output", type=str, help="Path to output file")
-    parser.add_argument("--plugins", type=str, default="travel", 
-                        help="Comma-separated list of plugins to activate (default: document)")
     args = parser.parse_args()
     
     # Setup logging
@@ -490,11 +583,6 @@ def main():
     log_file = os.path.join(log_dir, "simulation.log")
     logger = setup_logger(log_file=log_file)
     
-    # Parse the plugins argument
-    active_plugins = [p.strip() for p in args.plugins.split(",")]
-    
-    
-    
     # Load simulation data
     data_loader = SimulationDataLoader(config.SIMULATION_CONFIG.get("data_dir", "simulation_data"))
     
@@ -502,10 +590,17 @@ def main():
         # Run single simulation
         try:
             simulation_data = data_loader.load_simulation_data(args.data)
+            
+            # Determine which plugin to load from the simulation data
+            plugin_name = determine_plugin_from_simulation_data(simulation_data)
+            if not plugin_name:
+                raise ValueError(f"Could not determine plugin from simulation data in {args.data}")
+            
+            logger.info(f"Determined plugin: {plugin_name}")
 
-            # Initialize components with simulation data for plugin initialization
+            # Initialize components with the determined plugin
             plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator = \
-                initialize_components(active_plugins, simulation_data)
+                initialize_components(plugin_name, simulation_data)
             
             # Run simulation
             result = run_simulation(
@@ -583,10 +678,17 @@ def main():
             
             try:
                 simulation_data = data_loader.load_simulation_data(file_path)
+                
+                # Determine which plugin to load from the simulation data
+                plugin_name = determine_plugin_from_simulation_data(simulation_data)
+                if not plugin_name:
+                    raise ValueError(f"Could not determine plugin from simulation data in {file_path}")
+                
+                logger.info(f"Determined plugin: {plugin_name} for {file_path}")
 
-                # Initialize components with simulation data for plugin initialization
+                # Initialize components with the determined plugin
                 plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator = \
-                    initialize_components(active_plugins, simulation_data)
+                    initialize_components(plugin_name, simulation_data)
                 
                 # Run simulation
                 result = run_simulation(

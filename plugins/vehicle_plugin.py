@@ -1,6 +1,6 @@
 import random
 from copy import deepcopy
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import logging
 
 from plugins.base_plugin import BasePlugin

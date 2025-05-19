@@ -633,13 +633,10 @@ class TradingBot:
             return {"notification": f"Stocks {', '.join(changed_stocks)} have significant price changes."}
         else:
             return {"notification": "No significant price changes in the selected stocks."}
-    
-    import logging
-from typing import Dict, List, Any, Optional, Tuple, Union
-import copy
-from plugins.base_plugin import BasePlugin
 
-logger = logging.getLogger(__name__)
+
+# Import the base plugin here to avoid circular imports
+from plugins.base_plugin import BasePlugin
 
 
 class TradingPlugin(BasePlugin):
@@ -652,8 +649,6 @@ class TradingPlugin(BasePlugin):
     
     def __init__(self):
         """Initialize the trading plugin."""
-        # Import here to avoid circular imports
-        from trading_api import TradingBot
         self.trading_bot = TradingBot()
         self._name = "trading"
         self._description = "Plugin for stock trading operations"
@@ -1095,3 +1090,248 @@ class TradingPlugin(BasePlugin):
             self._invalidate_domain_cache()  # Invalidate cache after loading
             return True
         return False
+    
+    def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a tool with the given parameters."""
+        # Cast parameters first using the base class method
+        casted_params, cast_error = self._cast_parameters(tool_name, parameters)
+        if cast_error:
+            return {
+                "success": False,
+                "message": f"Parameter casting error: {cast_error}",
+                "error": "TYPE_CASTING_ERROR"
+            }
+        
+        # Validate parameters
+        is_valid, error = self.validate_tool_call(tool_name, casted_params)
+        if not is_valid:
+            return {
+                "success": False,
+                "message": error,
+                "error": "INVALID_PARAMETERS"
+            }
+        
+        try:
+            # Call the corresponding method on the trading bot
+            if hasattr(self.trading_bot, tool_name):
+                bot_method = getattr(self.trading_bot, tool_name)
+                result = bot_method(**casted_params)
+                
+                # Invalidate domain cache if this was a state-changing operation
+                if tool_name in self._state_changing_operations:
+                    self._invalidate_domain_cache()
+                
+                # Check if the result indicates an error
+                if isinstance(result, dict) and "error" in result:
+                    return {
+                        "success": False,
+                        "message": result["error"],
+                        "error": "OPERATION_FAILED"
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "message": f"Successfully executed {tool_name}",
+                        "output": result
+                    }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Unknown tool: {tool_name}",
+                    "error": "UNKNOWN_TOOL"
+                }
+        except Exception as e:
+            logger.exception(f"Error executing {tool_name}: {e}")
+            return {
+                "success": False,
+                "message": str(e),
+                "error": "EXECUTION_ERROR"
+            }
+    
+    def validate_tool_call(self, tool_name: str, parameters: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Validate a tool call before execution."""
+        # Find the tool definition
+        tool_def = None
+        for tool in self._tools:
+            if tool["name"] == tool_name:
+                tool_def = tool
+                break
+        
+        if not tool_def:
+            return False, f"Unknown tool: {tool_name}"
+        
+        # Check required arguments
+        for arg_def in tool_def.get("arguments", []):
+            if arg_def.get("required", True) and arg_def["name"] not in parameters:
+                return False, f"Missing required argument: {arg_def['name']}"
+            
+            # If the argument is provided, validate its value
+            if arg_def["name"] in parameters and parameters[arg_def["name"]] != "<UNK>":
+                value = parameters[arg_def["name"]]
+                
+                # Skip empty values for optional parameters
+                if value is None and not arg_def.get("required", True):
+                    continue
+                    
+                # Validate based on domain type
+                domain = arg_def.get("domain", {})
+                domain_type = domain.get("type", "string")
+                
+                if domain_type == "numeric_range":
+                    try:
+                        val = float(value)
+                        start, end = domain.get("values", [0, 1000000])
+                        if not (start <= val <= end):
+                            return False, f"Value {value} for {arg_def['name']} is out of range [{start}, {end}]"
+                    except (ValueError, TypeError):
+                        return False, f"Invalid numeric value for {arg_def['name']}: {value}"
+                
+                elif domain_type == "finite":
+                    # Get dynamic domain values if data_dependent
+                    if domain.get("data_dependent"):
+                        dynamic_domains = self._update_dynamic_domains()
+                        domain_key = f"{tool_name}.{arg_def['name']}"
+                        if domain_key in dynamic_domains:
+                            valid_values = dynamic_domains[domain_key].get("values", [])
+                        else:
+                            valid_values = domain.get("values", [])
+                    else:
+                        valid_values = domain.get("values", [])
+                    
+                    if value not in valid_values:
+                        values_str = ", ".join(str(v) for v in valid_values)
+                        return False, f"Invalid value for {arg_def['name']}: {value}. Expected one of: {values_str}"
+                
+                elif domain_type == "boolean":
+                    if not isinstance(value, bool) and value not in [True, False, "true", "false", "True", "False"]:
+                        return False, f"Invalid boolean value for {arg_def['name']}: {value}"
+                
+                elif domain_type == "list":
+                    if not isinstance(value, list):
+                        return False, f"Invalid list value for {arg_def['name']}: {value}"
+        
+        return True, None
+    
+    def get_domain_updates_from_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Update tool domains based on context."""
+        # Initialize from config if available
+        if "initial_config" in context:
+            self.initialize_from_config(context["initial_config"])
+        
+        # Return dynamic domain updates
+        return self._update_dynamic_domains()
+    
+    def get_uncertainty_context(self) -> Dict[str, Any]:
+        """Get trading-specific context for uncertainty calculation."""
+        try:
+            context = {
+                "has_orders": len(self.trading_bot.orders) > 0,
+                "has_watchlist": len(self.trading_bot.watch_list) > 0,
+                "market_status": self.trading_bot.market_status,
+                "account_balance": self.trading_bot.account_info.get("balance", 0)
+            }
+            
+            if context["has_orders"]:
+                context["available_order_ids"] = list(self.trading_bot.orders.keys())
+                # Add order status information for validation checking
+                context["order_statuses"] = {
+                    order_id: order_info.get("status", "Unknown") 
+                    for order_id, order_info in self.trading_bot.orders.items()
+                }
+            
+            if context["has_watchlist"]:
+                context["watchlist_symbols"] = self.trading_bot.watch_list
+            
+            # Add available stock symbols
+            context["available_stocks"] = list(self.trading_bot.stocks.keys())
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error getting uncertainty context: {e}")
+            return {}
+    
+    def get_prompt_templates(self) -> Dict[str, str]:
+        """Get trading-specific prompt templates."""
+        return {
+            "tool_selection": """
+You are an AI assistant that helps users with stock trading operations.
+
+Conversation history:
+{conversation_history}
+
+User query: "{user_query}"
+
+Available tools:
+{tool_descriptions}
+
+Please analyze the user's query and determine which tool(s) should be called to fulfill the request.
+For each tool, specify all required parameters. If a parameter is uncertain, use "<UNK>" as the value.
+
+Think through this step by step:
+1. What is the user trying to do with the trading system?
+2. Which trading operation(s) are needed to complete this task?
+3. What parameters are needed for each operation?
+4. Which parameters can be determined from the query, and which are uncertain?
+
+Consider trading-specific constraints:
+- Market must be open for certain operations (transactions, deposits/withdrawals)
+- Order IDs must exist to cancel or get details
+- Stock symbols must be valid for trading operations
+- Account balance affects ability to make purchases or withdrawals
+
+Return your response as a JSON object with the following structure:
+{
+  "reasoning": "Your step-by-step reasoning about what tools to use and why",
+  "tool_calls": [
+    {
+      "tool_name": "name_of_tool",
+      "arguments": {
+        "arg1": "value1",
+        "arg2": "<UNK>"
+      }
+    }
+  ]
+}
+""",
+            "question_generation": """
+You are an AI assistant that helps users with stock trading operations.
+
+Conversation history:
+{conversation_history}
+
+Original user query: "{user_query}"
+
+I've determined that the following tool calls are needed, but some arguments are uncertain:
+
+Tool Calls:
+{tool_calls}
+
+Uncertain Arguments:
+{uncertain_args}
+
+Your task is to generate clarification questions that would help resolve the uncertainty about specific arguments.
+
+Consider the context of trading operations:
+- Stock symbols (AAPL, GOOG, TSLA, etc.)
+- Order types (Buy, Sell)
+- Price ranges and amounts
+- Account balance considerations
+- Market timing
+
+Instructions:
+1. Generate questions that are clear, specific, and directly address the uncertain arguments
+2. Each question should target one or more specific arguments
+3. Questions should be conversational and easy for a user to understand
+4. For each question, specify which tool and argument(s) it aims to clarify
+
+Return your response as a JSON object with the following structure:
+{
+  "questions": [
+    {
+      "question": "A clear question to ask the user about trading operations",
+      "target_args": [["tool_name", "arg_name"], ["tool_name", "other_arg_name"]]
+    }
+  ]
+}
+"""
+        }
