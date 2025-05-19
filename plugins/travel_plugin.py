@@ -12,15 +12,25 @@ class TravelAPI:
         """Initialize the Travel API with default values."""
         self.credit_card_list = {}
         self.booking_record = {}
-        self.access_token = None
-        self.token_type = None
-        self.token_expires_in = None
-        self.token_scope = None
         self.user_first_name = None
         self.user_last_name = None
         self.budget_limit = None
         self._api_description = "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information."
         self._random = None  # Will be initialized later
+        
+        # Define base costs for available routes
+        self.base_costs = {
+            ("SFO", "LAX"): 200,
+            ("SFO", "JFK"): 500,
+            ("SFO", "ORD"): 400,
+            ("SFO", "BOS"): 450,
+            ("LAX", "SFO"): 100,
+            ("LAX", "JFK"): 600,
+            ("LAX", "ORD"): 500,
+            ("LAX", "BOS"): 550,
+            ("JFK", "ORD"): 300,
+            ("JFK", "BOS"): 250,
+        }
     
     def _load_scenario(self, scenario: Dict[str, Any]):
         """
@@ -34,66 +44,13 @@ class TravelAPI:
         self._random = random.Random(scenario.get("random_seed", 141053))
         self.credit_card_list = scenario.get("credit_card_list", {})
         self.booking_record = scenario.get("booking_record", {})
-        self.access_token = scenario.get("access_token", None)
-        self.token_type = scenario.get("token_type", None)
-        self.token_expires_in = scenario.get("token_expires_in", None)
-        self.token_scope = scenario.get("token_scope", None)
         self.user_first_name = scenario.get("user_first_name", None)
         self.user_last_name = scenario.get("user_last_name", None)
         self.budget_limit = scenario.get("budget_limit", None)
-    
-    def authenticate_travel(
-        self,
-        client_id: str,
-        client_secret: str,
-        refresh_token: str,
-        grant_type: str,
-        user_first_name: str,
-        user_last_name: str,
-    ) -> Dict[str, Union[int, str]]:
-        """
-        Authenticate the user with the travel API
-
-        Args:
-            client_id: The client applications client_id supplied by App Management
-            client_secret: The client applications client_secret supplied by App Management
-            refresh_token: The refresh token obtained from the initial authentication
-            grant_type: The grant type of the authentication request. Here are the options: read_write, read, write
-            user_first_name: The first name of the user
-            user_last_name: The last name of the user
-        Returns:
-            Dictionary containing authentication results including:
-            - expires_in: The number of time it can use until the access token expires
-            - access_token: The access token to be used in the Authorization header of future requests
-            - token_type: The type of token
-            - scope: The scope of the token
-        """
-        import random
-        if not self._random:
-            self._random = random.Random(141053)
-            
-        self.token_expires_in = 2
-        self.access_token = str(self._random.randint(100000, 999999))  # 6 digits
-        self.token_type = "Bearer"
-        self.token_scope = grant_type
-        self.user_first_name = user_first_name
-        self.user_last_name = user_last_name
-        return {
-            "expires_in": 2,
-            "access_token": self.access_token,
-            "token_type": "Bearer",
-            "scope": grant_type,
-        }
-    
-    def travel_get_login_status(self) -> Dict[str, bool]:
-        """
-        Get the status of the login
-
-        Returns:
-            Dictionary containing the login status
-        """
-        is_not_loggedin = self.token_expires_in is None or self.token_expires_in == 0
-        return {"status": not is_not_loggedin}
+        
+        # Update base_costs if provided in scenario
+        if "base_costs" in scenario:
+            self.base_costs.update(scenario["base_costs"])
     
     def get_budget_fiscal_year(
         self,
@@ -111,53 +68,9 @@ class TravelAPI:
         """
         return {"budget_fiscal_year": "2018"}
     
-    def register_credit_card(
-        self,
-        access_token: str,
-        card_number: str,
-        expiration_date: str,
-        cardholder_name: str,
-        card_verification_number: int,
-    ) -> Dict[str, Union[str, Dict[str, str]]]:
-        """
-        Register a credit card
-
-        Args:
-            access_token: The access token obtained from the authenticate method
-            card_number: The credit card number
-            expiration_date: The expiration date of the credit card in the format MM/YYYY
-            cardholder_name: The name of the cardholder
-            card_verification_number: The card verification number
-        Returns:
-            Dictionary containing the card_id or error message
-        """
-        import random
-        if not self._random:
-            self._random = random.Random(141053)
-            
-        if self.token_expires_in is None:
-            return {"error": "Token not initialized"}
-        if self.token_expires_in == 0:
-            return {"error": "Token expired"}
-        if access_token != self.access_token:
-            if self.token_expires_in is not None:
-                self.token_expires_in -= 1
-            return {"error": "Invalid access token"}
-        if card_number in self.credit_card_list:
-            return {"error": "Card already registered"}
-        card_id = str(self._random.randint(100000000000, 999999999999))  # 12 digits
-        self.credit_card_list[card_id] = {
-            "card_number": card_number,
-            "expiration_date": expiration_date,
-            "cardholder_name": cardholder_name,
-            "card_verification_number": card_verification_number,
-            "balance": self._random.randint(10000, 99999),  # 5 digits
-        }
-        return {"card_id": card_id}
-    
     def get_flight_cost(
         self, travel_from: str, travel_to: str, travel_date: str, travel_class: str
-    ) -> Dict[str, List[float]]:
+    ) -> Dict[str, Union[List[float], str]]:
         """
         Get the list of cost of a flight in USD based on location, date, and class
 
@@ -167,26 +80,12 @@ class TravelAPI:
             travel_date: The date of the travel in the format 'YYYY-MM-DD'
             travel_class: The class of the travel. Options are: economy, business, first.
         Returns:
-            Dictionary containing a list of flight costs
+            Dictionary containing a list of flight costs or error message
         """
-        base_costs = {
-            ("SFO", "LAX"): 200,
-            ("SFO", "JFK"): 500,
-            ("SFO", "ORD"): 400,
-            ("SFO", "BOS"): 450,
-            ("LAX", "SFO"): 100,
-            ("LAX", "JFK"): 600,
-            ("LAX", "ORD"): 500,
-            ("LAX", "BOS"): 550,
-            ("JFK", "ORD"): 300,
-            ("JFK", "BOS"): 250,
-            # Add more routes as needed
-        }
-
         # Get the base cost, raise an error if the route is not available
         travel_pair = (travel_from, travel_to)
-        if travel_pair in base_costs:
-            base_cost = base_costs[travel_pair]
+        if travel_pair in self.base_costs:
+            base_cost = self.base_costs[travel_pair]
         else:
             return {"error": "No available route for the given airports."}
 
@@ -208,130 +107,6 @@ class TravelAPI:
         travel_cost = float(base_cost * factor * travel_date_multiplier)
         return {"travel_cost_list": [travel_cost]}
     
-    def get_credit_card_balance(
-        self, access_token: str, card_id: str
-    ) -> Dict[str, Union[float, str]]:
-        """
-        Get the balance of a credit card
-        
-        Args:
-            access_token: The access token obtained from the authenticate
-            card_id: The ID of the credit card
-        Returns:
-            Dictionary containing the card balance or error message
-        """
-        if self.token_expires_in == 0:
-            return {"error": "Token expired"}
-        if access_token != self.access_token:
-            self.token_expires_in -= 1
-            return {"error": "Invalid access token"}
-        if card_id not in self.credit_card_list:
-            return {
-                "error": "Card not registered. Here are a list of card_id's: "
-                + str(list(self.credit_card_list.keys()))
-            }
-        return {"card_balance": self.credit_card_list[card_id]["balance"]}
-    
-    def book_flight(
-        self,
-        access_token: str,
-        card_id: str,
-        travel_date: str,
-        travel_from: str,
-        travel_to: str,
-        travel_class: str,
-        travel_cost: float,
-    ) -> Dict[str, Union[str, bool]]:
-        """
-        Book a flight given the travel information. From and To should be the airport codes in the IATA format.
-
-        Args:
-            access_token: The access token obtained from the authenticate
-            card_id: The ID of the credit card to use for the booking
-            travel_date: The date of the travel in the format YYYY-MM-DD
-            travel_from: The location the travel is from
-            travel_to: The location the travel is to
-            travel_class: The class of the travel
-            travel_cost: The cost of the travel
-        Returns:
-            Dictionary containing booking information or error message
-        """
-        import random
-        if not self._random:
-            self._random = random.Random(141053)
-            
-        if self.token_expires_in == 0:
-            return {"booking_status": False, "error": "Token expired"}
-        if access_token != self.access_token:
-            self.token_expires_in -= 1
-            return {"booking_status": False, "error": "Invalid access token"}
-        if card_id not in self.credit_card_list:
-            return {"booking_status": False, "error": "Card not registered"}
-        if "balance" not in self.credit_card_list[card_id]:
-            return {"booking_status": False, "error": "Balance not found"}
-        if self.credit_card_list[card_id]["balance"] < travel_cost:
-            return {"booking_status": False, "error": "Insufficient funds"}
-        if (
-            self.budget_limit is not None
-            and self.credit_card_list[card_id]["balance"] < self.budget_limit
-        ):
-            return {
-                "booking_status": False,
-                "error": "Balance is less than budget limit",
-            }
-        travel_cost = float(travel_cost)
-        self.credit_card_list[card_id]["balance"] -= travel_cost
-        booking_id = str(self._random.randint(1000000, 9999999))  # 7 digits
-        transaction_id = str(self._random.randint(10000000, 99999999))  # 8 digits
-        self.booking_record[booking_id] = {
-            "card_id": card_id,
-            "travel_date": travel_date,
-            "travel_from": travel_from,
-            "travel_to": travel_to,
-            "travel_class": travel_class,
-            "travel_cost": travel_cost,
-            "transaction_id": transaction_id,
-        }
-        return {
-            "booking_id": booking_id,
-            "transaction_id": transaction_id,
-            "booking_status": True,
-        }
-    
-    def retrieve_invoice(
-        self,
-        access_token: str,
-        booking_id: Optional[str] = None,
-        insurance_id: Optional[str] = None,
-    ) -> Dict[str, Union[Dict[str, Union[str, float]], str]]:
-        """
-        Retrieve the invoice for a booking
-
-        Args:
-            access_token: The access token obtained from the authenticate
-            booking_id: [Optional] The ID of the booking
-            insurance_id: [Optional] The ID of the insurance
-        Returns:
-            Dictionary containing invoice information or error message
-        """
-        if self.token_expires_in == 0:
-            return {"error": "Token expired"}
-        if access_token != self.access_token:
-            self.token_expires_in -= 1
-            return {"error": "Invalid access token"}
-        if booking_id not in self.booking_record:
-            return {"error": "Booking not found"}
-        invoice = {
-            "booking_id": booking_id,
-            "travel_date": self.booking_record[booking_id]["travel_date"],
-            "travel_from": self.booking_record[booking_id]["travel_from"],
-            "travel_to": self.booking_record[booking_id]["travel_to"],
-            "travel_class": self.booking_record[booking_id]["travel_class"],
-            "travel_cost": self.booking_record[booking_id]["travel_cost"],
-            "transaction_id": self.booking_record[booking_id]["transaction_id"],
-        }
-        return {"invoice": invoice}
-    
     def list_all_airports(self) -> Dict[str, List[str]]:
         """
         List all available airports
@@ -339,41 +114,25 @@ class TravelAPI:
         Returns:
             Dictionary containing a list of all available airports
         """
-        airports = [
+        # Get airports from base_costs and add additional airports
+        airport_set = set()
+        for route in self.base_costs.keys():
+            airport_set.add(route[0])
+            airport_set.add(route[1])
+        
+        # Add additional airports that might not be in routes
+        additional_airports = [
             "RMS", "SBK", "MPC", "SVP", "SHD", "CDG", "LHR", "SSV", "OKD", "WLB",
-            "PEK", "HND", "HKG", "CIA", "CRH", "ATV", "PHV", "GFD", "SFO", "LAX",
-            "JFK", "ORD", "BOS",
+            "PEK", "HND", "HKG", "CIA", "CRH", "ATV", "PHV", "GFD"
         ]
+        
+        airport_set.update(additional_airports)
+        airports = sorted(list(airport_set))
         return {"airports": airports}
-    
-    def cancel_booking(
-        self, access_token: str, booking_id: str
-    ) -> Dict[str, Union[bool, str]]:
-        """
-        Cancel a booking
-
-        Args:
-            access_token: The access token obtained from the authenticate
-            booking_id: The ID of the booking
-        Returns:
-            Dictionary containing cancellation status or error message
-        """
-        if self.token_expires_in == 0:
-            return {"cancel_status": False, "error": "Token expired"}
-        if access_token != self.access_token:
-            self.token_expires_in -= 1
-            return {"cancel_status": False, "error": "Invalid access token"}
-        if booking_id not in self.booking_record:
-            return {"cancel_status": False, "error": "Booking not found"}
-        card_id = self.booking_record[booking_id]["card_id"]
-        travel_cost = self.booking_record[booking_id]["travel_cost"]
-        self.credit_card_list[card_id]["balance"] += travel_cost
-        del self.booking_record[booking_id]
-        return {"cancel_status": True}
     
     def compute_exchange_rate(
         self, base_currency: str, target_currency: str, value: float
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Union[float, str]]:
         """
         Compute the exchange rate between two currencies
 
@@ -382,7 +141,7 @@ class TravelAPI:
             target_currency: The target currency. [Enum]: USD, RMB, EUR, JPY, GBP, CAD, AUD, INR, RUB, BRL, MXN
             value: The value to convert
         Returns:
-            Dictionary containing the exchanged value
+            Dictionary containing the exchanged value or error message
         """
         exchange_rates = {
             ("USD", "RMB"): 7,
@@ -456,27 +215,6 @@ class TravelAPI:
         # If all checks pass
         return {"verification_status": True}
     
-    def set_budget_limit(
-        self, access_token: str, budget_limit: float
-    ) -> Dict[str, Union[float, str]]:
-        """
-        Set the budget limit for the user
-
-        Args:
-            access_token: The access token obtained from the authentication process or initial configuration.
-            budget_limit: The budget limit to set in USD
-        Returns:
-            Dictionary containing the budget limit or error message
-        """
-        if self.token_expires_in == 0:
-            return {"error": "Token expired"}
-        if access_token != self.access_token:
-            self.token_expires_in -= 1
-            return {"error": "Invalid access token"}
-        budget_limit = float(budget_limit)
-        self.budget_limit = budget_limit
-        return {"budget_limit": budget_limit}
-    
     def get_nearest_airport_by_city(self, location: str) -> Dict[str, str]:
         """
         Get the nearest airport to the given location
@@ -484,7 +222,7 @@ class TravelAPI:
         Args:
             location: The name of the location. [Enum]: Rivermist, Stonebrook, Maplecrest, Silverpine, Shadowridge, London, Paris, Sunset Valley, Oakendale, Willowbend, Crescent Hollow, Autumnville, Pinehaven, Greenfield, San Francisco, Los Angeles, New York, Chicago, Boston, Beijing, Hong Kong, Rome, Tokyo
         Returns:
-            Dictionary containing the nearest airport
+            Dictionary containing the nearest airport or error message
         """
         airport_map = {
             "Rivermist": "RMS",
@@ -514,9 +252,184 @@ class TravelAPI:
 
         return {"nearest_airport": airport_map.get(location, "Unknown")}
     
+    def register_credit_card(
+        self,
+        card_number: str,
+        expiration_date: str,
+        cardholder_name: str,
+        card_verification_number: int,
+    ) -> Dict[str, Union[str, Dict[str, str]]]:
+        """
+        Register a credit card
+
+        Args:
+            card_number: The credit card number
+            expiration_date: The expiration date of the credit card in the format MM/YYYY
+            cardholder_name: The name of the cardholder
+            card_verification_number: The card verification number
+        Returns:
+            Dictionary containing the card_id or error message
+        """
+        import random
+        if not self._random:
+            self._random = random.Random(141053)
+            
+        if card_number in self.credit_card_list:
+            return {"error": "Card already registered"}
+        
+        card_id = str(self._random.randint(100000000000, 999999999999))  # 12 digits
+        self.credit_card_list[card_id] = {
+            "card_number": card_number,
+            "expiration_date": expiration_date,
+            "cardholder_name": cardholder_name,
+            "card_verification_number": card_verification_number,
+            "balance": self._random.randint(10000, 99999),  # 5 digits
+        }
+        return {"card_id": card_id}
+    
+    def get_credit_card_balance(
+        self, card_id: str
+    ) -> Dict[str, Union[float, str]]:
+        """
+        Get the balance of a credit card
+        
+        Args:
+            card_id: The ID of the credit card
+        Returns:
+            Dictionary containing the card balance or error message
+        """
+        if card_id not in self.credit_card_list:
+            return {
+                "error": "Card not registered. Here are a list of card_id's: "
+                + str(list(self.credit_card_list.keys()))
+            }
+        return {"card_balance": self.credit_card_list[card_id]["balance"]}
+    
+    def book_flight(
+        self,
+        card_id: str,
+        travel_date: str,
+        travel_from: str,
+        travel_to: str,
+        travel_class: str,
+        travel_cost: float,
+    ) -> Dict[str, Union[str, bool]]:
+        """
+        Book a flight given the travel information. From and To should be the airport codes in the IATA format.
+
+        Args:
+            card_id: The ID of the credit card to use for the booking
+            travel_date: The date of the travel in the format YYYY-MM-DD
+            travel_from: The location the travel is from
+            travel_to: The location the travel is to
+            travel_class: The class of the travel
+            travel_cost: The cost of the travel
+        Returns:
+            Dictionary containing booking information or error message
+        """
+        import random
+        if not self._random:
+            self._random = random.Random(141053)
+            
+        if card_id not in self.credit_card_list:
+            return {"booking_status": False, "error": "Card not registered"}
+        if "balance" not in self.credit_card_list[card_id]:
+            return {"booking_status": False, "error": "Balance not found"}
+        if self.credit_card_list[card_id]["balance"] < travel_cost:
+            return {"booking_status": False, "error": "Insufficient funds"}
+        if (
+            self.budget_limit is not None
+            and travel_cost > self.budget_limit
+        ):
+            return {
+                "booking_status": False,
+                "error": "Travel cost exceeds budget limit",
+            }
+        
+        travel_cost = float(travel_cost)
+        self.credit_card_list[card_id]["balance"] -= travel_cost
+        booking_id = str(self._random.randint(1000000, 9999999))  # 7 digits
+        transaction_id = str(self._random.randint(10000000, 99999999))  # 8 digits
+        self.booking_record[booking_id] = {
+            "card_id": card_id,
+            "travel_date": travel_date,
+            "travel_from": travel_from,
+            "travel_to": travel_to,
+            "travel_class": travel_class,
+            "travel_cost": travel_cost,
+            "transaction_id": transaction_id,
+        }
+        return {
+            "booking_id": booking_id,
+            "transaction_id": transaction_id,
+            "booking_status": True,
+        }
+    
+    def retrieve_invoice(
+        self,
+        booking_id: Optional[str] = None,
+        insurance_id: Optional[str] = None,
+    ) -> Dict[str, Union[Dict[str, Union[str, float]], str]]:
+        """
+        Retrieve the invoice for a booking
+
+        Args:
+            booking_id: [Optional] The ID of the booking
+            insurance_id: [Optional] The ID of the insurance
+        Returns:
+            Dictionary containing invoice information or error message
+        """
+        if booking_id not in self.booking_record:
+            return {"error": "Booking not found"}
+        
+        invoice = {
+            "booking_id": booking_id,
+            "travel_date": self.booking_record[booking_id]["travel_date"],
+            "travel_from": self.booking_record[booking_id]["travel_from"],
+            "travel_to": self.booking_record[booking_id]["travel_to"],
+            "travel_class": self.booking_record[booking_id]["travel_class"],
+            "travel_cost": self.booking_record[booking_id]["travel_cost"],
+            "transaction_id": self.booking_record[booking_id]["transaction_id"],
+        }
+        return {"invoice": invoice}
+    
+    def cancel_booking(
+        self, booking_id: str
+    ) -> Dict[str, Union[bool, str]]:
+        """
+        Cancel a booking
+
+        Args:
+            booking_id: The ID of the booking
+        Returns:
+            Dictionary containing cancellation status or error message
+        """
+        if booking_id not in self.booking_record:
+            return {"cancel_status": False, "error": "Booking not found"}
+        
+        card_id = self.booking_record[booking_id]["card_id"]
+        travel_cost = self.booking_record[booking_id]["travel_cost"]
+        self.credit_card_list[card_id]["balance"] += travel_cost
+        del self.booking_record[booking_id]
+        return {"cancel_status": True}
+    
+    def set_budget_limit(
+        self, budget_limit: float
+    ) -> Dict[str, Union[float, str]]:
+        """
+        Set the budget limit for the user
+
+        Args:
+            budget_limit: The budget limit to set in USD
+        Returns:
+            Dictionary containing the budget limit
+        """
+        budget_limit = float(budget_limit)
+        self.budget_limit = budget_limit
+        return {"budget_limit": budget_limit}
+    
     def purchase_insurance(
         self,
-        access_token: str,
         insurance_type: str,
         booking_id: str,
         insurance_cost: float,
@@ -526,11 +439,10 @@ class TravelAPI:
         Purchase insurance
 
         Args:
-            access_token: The access token obtained from the authenticate
             insurance_type: The type of insurance to purchase
             insurance_cost: The cost of the insurance
             booking_id: The ID of the booking
-            card_id: The ID of the credit card to use for the
+            card_id: The ID of the credit card to use for the insurance purchase
         Returns:
             Dictionary containing insurance information or error message
         """
@@ -538,17 +450,15 @@ class TravelAPI:
         if not self._random:
             self._random = random.Random(141053)
             
-        if self.token_expires_in == 0:
-            return {"insurance_status": False, "error": "Token expired"}
-        if access_token != self.access_token:
-            self.token_expires_in -= 1
-            return {"insurance_status": False, "error": "Invalid access token"}
-        if self.budget_limit is not None and self.budget_limit < insurance_cost:
-            return {"insurance_status": False, "error": "Exceeded budget limit"}
+        if self.budget_limit is not None and insurance_cost > self.budget_limit:
+            return {"insurance_status": False, "error": "Insurance cost exceeds budget limit"}
         if booking_id not in self.booking_record:
             return {"insurance_status": False, "error": "Booking not found"}
         if card_id not in self.credit_card_list:
             return {"insurance_status": False, "error": "Credit card not registered"}
+        if self.credit_card_list[card_id]["balance"] < insurance_cost:
+            return {"insurance_status": False, "error": "Insufficient funds"}
+            
         self.credit_card_list[card_id]["balance"] -= insurance_cost
         return {
             "insurance_id": str(self._random.randint(100000000, 999999999)),  # 9 digits
@@ -587,7 +497,8 @@ class TravelPlugin(BasePlugin):
     Plugin for travel-related operations.
     
     This plugin provides tools for booking flights, managing credit cards,
-    and performing various travel-related operations.
+    and performing various travel-related operations with dynamic domain updates
+    and proper type casting.
     """
     
     def __init__(self):
@@ -596,6 +507,12 @@ class TravelPlugin(BasePlugin):
         self._name = "travel"
         self._description = "Plugin for travel-related operations, including flight bookings, credit card management, and travel information."
         self._tools = self._generate_tool_definitions()
+        
+        # Cache for dynamic domains - invalidated when state changes
+        self._domain_cache = None
+        self._state_changing_operations = {
+            'register_credit_card', 'book_flight', 'cancel_booking', 'set_budget_limit', 'purchase_insurance'
+        }
     
     @property
     def name(self) -> str:
@@ -610,72 +527,6 @@ class TravelPlugin(BasePlugin):
     def _generate_tool_definitions(self) -> List[Dict[str, Any]]:
         """Generate tool definitions for the travel plugin."""
         return [
-            {
-                "name": "authenticate_travel",
-                "description": "Authenticate the user with the travel API",
-                "arguments": [
-                    {
-                        "name": "client_id",
-                        "description": "The client applications client_id supplied by App Management",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.8
-                        },
-                        "required": True
-                    },
-                    {
-                        "name": "client_secret",
-                        "description": "The client applications client_secret supplied by App Management",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.8
-                        },
-                        "required": True
-                    },
-                    {
-                        "name": "refresh_token",
-                        "description": "The refresh token obtained from the initial authentication",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.8
-                        },
-                        "required": True
-                    },
-                    {
-                        "name": "grant_type",
-                        "description": "The grant type of the authentication request (read_write, read, write)",
-                        "domain": {
-                            "type": "finite",
-                            "values": ["read_write", "read", "write"],
-                            "importance": 0.7
-                        },
-                        "required": True
-                    },
-                    {
-                        "name": "user_first_name",
-                        "description": "The first name of the user",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
-                    {
-                        "name": "user_last_name",
-                        "description": "The last name of the user",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    }
-                ]
-            },
-            {
-                "name": "travel_get_login_status",
-                "description": "Get the status of the login",
-                "arguments": []
-            },
             {
                 "name": "get_budget_fiscal_year",
                 "description": "Get the budget fiscal year",
@@ -706,15 +557,6 @@ class TravelPlugin(BasePlugin):
                 "name": "register_credit_card",
                 "description": "Register a credit card",
                 "arguments": [
-                    {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate method",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
                     {
                         "name": "card_number",
                         "description": "The credit card number",
@@ -804,15 +646,6 @@ class TravelPlugin(BasePlugin):
                 "description": "Get the balance of a credit card",
                 "arguments": [
                     {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
-                    {
                         "name": "card_id",
                         "description": "The ID of the credit card",
                         "domain": {
@@ -828,15 +661,6 @@ class TravelPlugin(BasePlugin):
                 "name": "book_flight",
                 "description": "Book a flight given the travel information",
                 "arguments": [
-                    {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
                     {
                         "name": "card_id",
                         "description": "The ID of the credit card to use for the booking",
@@ -903,15 +727,6 @@ class TravelPlugin(BasePlugin):
                 "description": "Retrieve the invoice for a booking",
                 "arguments": [
                     {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
-                    {
                         "name": "booking_id",
                         "description": "The ID of the booking",
                         "domain": {
@@ -944,15 +759,6 @@ class TravelPlugin(BasePlugin):
                 "name": "cancel_booking",
                 "description": "Cancel a booking",
                 "arguments": [
-                    {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
                     {
                         "name": "booking_id",
                         "description": "The ID of the booking",
@@ -1048,15 +854,6 @@ class TravelPlugin(BasePlugin):
                 "description": "Set the budget limit for the user",
                 "arguments": [
                     {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
-                    {
                         "name": "budget_limit",
                         "description": "The budget limit to set in USD",
                         "domain": {
@@ -1094,15 +891,6 @@ class TravelPlugin(BasePlugin):
                 "name": "purchase_insurance",
                 "description": "Purchase insurance for a booking",
                 "arguments": [
-                    {
-                        "name": "access_token",
-                        "description": "The access token obtained from the authenticate",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
                     {
                         "name": "insurance_type",
                         "description": "The type of insurance to purchase",
@@ -1181,18 +969,102 @@ class TravelPlugin(BasePlugin):
         """Get the list of tools provided by this plugin."""
         return self._tools
     
+    def _invalidate_domain_cache(self):
+        """Invalidate the domain cache when travel system state changes."""
+        self._domain_cache = None
+    
+    def _update_dynamic_domains(self) -> Dict[str, Any]:
+        """Update domains based on current travel system state."""
+        if self._domain_cache is not None:
+            return self._domain_cache
+        
+        try:
+            updates = {}
+            
+            # Update card_id domains based on available credit cards
+            card_ids = list(self.travel_api.credit_card_list.keys())
+            if card_ids:
+                card_id_fields = [
+                    "get_credit_card_balance.card_id",
+                    "book_flight.card_id",
+                    "purchase_insurance.card_id"
+                ]
+                for field in card_id_fields:
+                    updates[field] = {
+                        "type": "finite",
+                        "values": card_ids
+                    }
+            
+            # Update booking_id domains based on available bookings
+            booking_ids = list(self.travel_api.booking_record.keys())
+            if booking_ids:
+                booking_id_fields = [
+                    "retrieve_invoice.booking_id",
+                    "cancel_booking.booking_id",
+                    "purchase_insurance.booking_id",
+                    "contact_customer_support.booking_id"
+                ]
+                for field in booking_id_fields:
+                    updates[field] = {
+                        "type": "finite",
+                        "values": booking_ids
+                    }
+            
+            # Update airport domains based on available routes
+            airports = set()
+            for route in self.travel_api.base_costs.keys():
+                airports.add(route[0])
+                airports.add(route[1])
+            
+            # Add additional airports from list_all_airports
+            all_airports_response = self.travel_api.list_all_airports()
+            if "airports" in all_airports_response:
+                airports.update(all_airports_response["airports"])
+            
+            airport_list = sorted(list(airports))
+            if airport_list:
+                airport_fields = [
+                    "get_flight_cost.travel_from",
+                    "get_flight_cost.travel_to",
+                    "book_flight.travel_from",
+                    "book_flight.travel_to"
+                ]
+                for field in airport_fields:
+                    updates[field] = {
+                        "type": "finite",
+                        "values": airport_list
+                    }
+            
+            # Cache the result
+            self._domain_cache = updates
+            return updates
+            
+        except Exception as e:
+            logger.error(f"Error updating dynamic domains: {e}")
+            return {}
+    
     def initialize_from_config(self, config_data: Dict[str, Any]) -> bool:
         """Initialize the travel API from configuration data."""
         if "TravelAPI" in config_data:
             travel_config = config_data["TravelAPI"]
             self.travel_api._load_scenario(travel_config)
+            self._invalidate_domain_cache()  # Invalidate cache after loading
             return True
         return False
     
     def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with the given parameters."""
-        # Validate parameters first
-        is_valid, error = self.validate_tool_call(tool_name, parameters)
+        # Cast parameters first using the base class method
+        casted_params, cast_error = self._cast_parameters(tool_name, parameters)
+        if cast_error:
+            return {
+                "success": False,
+                "message": f"Parameter casting error: {cast_error}",
+                "error": "TYPE_CASTING_ERROR"
+            }
+        
+        # Validate parameters
+        is_valid, error = self.validate_tool_call(tool_name, casted_params)
         if not is_valid:
             return {
                 "success": False,
@@ -1204,7 +1076,11 @@ class TravelPlugin(BasePlugin):
             # Call the corresponding method on the travel API
             if hasattr(self.travel_api, tool_name):
                 api_method = getattr(self.travel_api, tool_name)
-                result = api_method(**parameters)
+                result = api_method(**casted_params)
+                
+                # Invalidate domain cache if this was a state-changing operation
+                if tool_name in self._state_changing_operations:
+                    self._invalidate_domain_cache()
                 
                 # Check if the result indicates an error
                 if isinstance(result, dict) and "error" in result:
@@ -1272,8 +1148,19 @@ class TravelPlugin(BasePlugin):
                         return False, f"Invalid numeric value for {arg_def['name']}: {value}"
                 
                 elif domain_type == "finite":
-                    if value not in domain.get("values", []):
-                        values_str = ", ".join(str(v) for v in domain.get("values", []))
+                    # Get dynamic domain values if data_dependent
+                    if domain.get("data_dependent"):
+                        dynamic_domains = self._update_dynamic_domains()
+                        domain_key = f"{tool_name}.{arg_def['name']}"
+                        if domain_key in dynamic_domains:
+                            valid_values = dynamic_domains[domain_key].get("values", [])
+                        else:
+                            valid_values = domain.get("values", [])
+                    else:
+                        valid_values = domain.get("values", [])
+                    
+                    if value not in valid_values:
+                        values_str = ", ".join(str(v) for v in valid_values)
                         return False, f"Invalid value for {arg_def['name']}: {value}. Expected one of: {values_str}"
                 
                 elif domain_type == "boolean":
@@ -1284,74 +1171,41 @@ class TravelPlugin(BasePlugin):
     
     def get_domain_updates_from_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Update tool domains based on context."""
-        updates = {}
-        
         # Initialize from config if available
-        if "initial_config" in context and "TravelAPI" in context["initial_config"]:
+        if "initial_config" in context:
             self.initialize_from_config(context["initial_config"])
         
-        # Update card_id domains based on available credit cards
-        card_ids = list(self.travel_api.credit_card_list.keys())
-        if card_ids:
-            card_id_fields = [
-                "get_credit_card_balance.card_id",
-                "book_flight.card_id",
-                "purchase_insurance.card_id"
-            ]
-            for field in card_id_fields:
-                updates[field] = {
-                    "type": "finite",
-                    "values": card_ids
-                }
-        
-        # Update booking_id domains based on available bookings
-        booking_ids = list(self.travel_api.booking_record.keys())
-        if booking_ids:
-            booking_id_fields = [
-                "retrieve_invoice.booking_id",
-                "cancel_booking.booking_id",
-                "purchase_insurance.booking_id",
-                "contact_customer_support.booking_id"
-            ]
-            for field in booking_id_fields:
-                updates[field] = {
-                    "type": "finite",
-                    "values": booking_ids
-                }
-        
-        # Get list of airports for travel domains
-        airports = ["SFO", "LAX", "JFK", "ORD", "BOS", "RMS", "SBK", "MPC", "SVP", "SHD", "CDG", "LHR", "SSV", "OKD", "WLB", "PEK", "HND", "HKG", "CIA", "CRH", "ATV", "PHV", "GFD"]
-        
-        if airports:
-            travel_fields = [
-                "get_flight_cost.travel_from",
-                "get_flight_cost.travel_to",
-                "book_flight.travel_from", 
-                "book_flight.travel_to"
-            ]
-            for field in travel_fields:
-                updates[field] = {
-                    "type": "finite",
-                    "values": airports
-                }
-        
-        return updates
+        # Return dynamic domain updates
+        return self._update_dynamic_domains()
     
     def get_uncertainty_context(self) -> Dict[str, Any]:
         """Get travel-specific context for uncertainty calculation."""
-        context = {
-            "authenticated": self.travel_api.access_token is not None,
-            "has_credit_cards": len(self.travel_api.credit_card_list) > 0,
-            "has_bookings": len(self.travel_api.booking_record) > 0
-        }
-        
-        if context["has_credit_cards"]:
-            context["available_card_ids"] = list(self.travel_api.credit_card_list.keys())
-        
-        if context["has_bookings"]:
-            context["available_booking_ids"] = list(self.travel_api.booking_record.keys())
-        
-        return context
+        try:
+            context = {
+                "has_credit_cards": len(self.travel_api.credit_card_list) > 0,
+                "has_bookings": len(self.travel_api.booking_record) > 0,
+                "budget_limit": self.travel_api.budget_limit,
+                "user_name": f"{self.travel_api.user_first_name} {self.travel_api.user_last_name}" if self.travel_api.user_first_name else None
+            }
+            
+            if context["has_credit_cards"]:
+                context["available_card_ids"] = list(self.travel_api.credit_card_list.keys())
+                # Add balance information for financial constraint checking
+                context["card_balances"] = {
+                    card_id: card_info.get("balance", 0) 
+                    for card_id, card_info in self.travel_api.credit_card_list.items()
+                }
+            
+            if context["has_bookings"]:
+                context["available_booking_ids"] = list(self.travel_api.booking_record.keys())
+            
+            # Add available routes for travel planning
+            context["available_routes"] = list(self.travel_api.base_costs.keys())
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error getting uncertainty context: {e}")
+            return {}
     
     def get_prompt_templates(self) -> Dict[str, str]:
         """Get travel-specific prompt templates."""
