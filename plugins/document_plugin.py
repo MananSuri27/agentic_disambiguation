@@ -19,6 +19,14 @@ class DocumentPlugin(BasePlugin):
             "number_of_pages": 1,  # Default, will be updated from context
             "pdf_name": "document.pdf"  # Default, will be updated from context
         }
+        
+        # Cache for dynamic domains - invalidated when document state changes
+        self._domain_cache = None
+        
+        # Only operations that can change page count
+        self._page_changing_operations = {
+            'delete_page', 'delete_page_range', 'add_page_with_text'
+        }
     
     @property
     def name(self) -> str:
@@ -27,6 +35,59 @@ class DocumentPlugin(BasePlugin):
     @property
     def description(self) -> str:
         return "Plugin for document-related operations like viewing, editing, and converting PDFs."
+    
+    def _invalidate_domain_cache(self):
+        """Invalidate the domain cache when document state changes."""
+        self._domain_cache = None
+    
+    def _update_dynamic_domains(self) -> Dict[str, Any]:
+        """Update domains based on current document state."""
+        if self._domain_cache is not None:
+            return self._domain_cache
+        
+        try:
+            updates = {}
+            num_pages = self._current_context.get("number_of_pages", 1)
+            
+            # Only page-related parameters need dynamic updates
+            page_operations = [
+                ("add_comment", "page_num"),
+                ("delete_page", "page_num"), 
+                ("add_signature", "page_num"),
+                ("add_page_with_text", "page_num"),
+                ("redact_page_range", "start"), ("redact_page_range", "end"),
+                ("redact_text", "start"), ("redact_text", "end"),
+                ("highlight_text", "start"), ("highlight_text", "end"),
+                ("underline_text", "start"), ("underline_text", "end"),
+                ("extract_pages", "start"), ("extract_pages", "end"),
+                ("delete_page_range", "start"), ("delete_page_range", "end")
+            ]
+            
+            for tool, param in page_operations:
+                updates[f"{tool}.{param}"] = {
+                    "type": "numeric_range",
+                    "values": [1, num_pages]
+                }
+            
+            # Cache the result
+            self._domain_cache = updates
+            return updates
+            
+        except Exception as e:
+            logger.error(f"Error updating dynamic domains: {e}")
+            return {}
+    
+    def initialize_from_config(self, config_data: Dict[str, Any]) -> bool:
+        """Initialize the document plugin from configuration data."""
+        if "DocumentPlugin" in config_data:
+            doc_config = config_data["DocumentPlugin"]
+            self._current_context.update({
+                k: v for k, v in doc_config.items() 
+                if k in ["number_of_pages", "pdf_name"]
+            })
+            self._invalidate_domain_cache()  # Invalidate cache after loading
+            return True
+        return False
     
     def _load_tool_definitions(self) -> List[Dict[str, Any]]:
         """Load tool definitions for PDF operations."""
@@ -142,7 +203,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Page number to add comment to",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -178,7 +239,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Start page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -189,7 +250,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "End page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -206,7 +267,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Start page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -217,7 +278,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "End page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -262,7 +323,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Start page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -273,7 +334,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "End page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -318,7 +379,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Start page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -329,7 +390,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "End page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -374,7 +435,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Start page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -385,7 +446,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "End page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -421,7 +482,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Page number to delete",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -457,7 +518,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Start page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -468,7 +529,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "End page number (inclusive)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -504,7 +565,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Page number to add signature to",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.9,
                             "data_dependent": True
                         },
@@ -569,7 +630,7 @@ class DocumentPlugin(BasePlugin):
                         "description": "Page number to insert at (1-indexed)",
                         "domain": {
                             "type": "numeric_range",
-                            "values": [1, 1],  # Will be updated based on document
+                            "values": [1, 1],  # Will be updated dynamically
                             "importance": 0.8,
                             "data_dependent": True
                         },
@@ -625,15 +686,54 @@ class DocumentPlugin(BasePlugin):
     
     def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with the given parameters."""
-        # Validate the tool call first
-        is_valid, error = self.validate_tool_call(tool_name, parameters)
+        # Cast parameters first using the base class method
+        casted_params, cast_error = self._cast_parameters(tool_name, parameters)
+        if cast_error:
+            return {
+                "success": False,
+                "message": f"Parameter casting error: {cast_error}",
+                "error": "TYPE_CASTING_ERROR"
+            }
+        
+        # Validate the tool call
+        is_valid, error = self.validate_tool_call(tool_name, casted_params)
         if not is_valid:
             return {
                 "success": False,
                 "message": f"Validation failed: {error}",
-                "error": error
+                "error": "VALIDATION_ERROR"
             }
         
+        # Execute the tool
+        try:
+            result = self._execute_tool_implementation(tool_name, casted_params)
+            
+            # Invalidate domain cache if this was a page-changing operation
+            if tool_name in self._page_changing_operations:
+                self._invalidate_domain_cache()
+                # Update page count if needed
+                if tool_name == "add_page_with_text":
+                    self._current_context["number_of_pages"] += 1
+                elif tool_name == "delete_page":
+                    self._current_context["number_of_pages"] = max(1, self._current_context["number_of_pages"] - 1)
+                elif tool_name == "delete_page_range":
+                    start = casted_params.get("start", 1)
+                    end = casted_params.get("end", 1)
+                    pages_deleted = end - start + 1
+                    self._current_context["number_of_pages"] = max(1, self._current_context["number_of_pages"] - pages_deleted)
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"Error executing tool {tool_name}")
+            return {
+                "success": False,
+                "message": f"Error executing tool: {str(e)}",
+                "error": "EXECUTION_ERROR"
+            }
+    
+    def _execute_tool_implementation(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Internal method to execute tools with mock implementations."""
         # This would call actual PDF operations in a real implementation
         # For now, return a mock successful result with appropriate messaging
         if tool_name == "duplicate":
@@ -921,14 +1021,8 @@ class DocumentPlugin(BasePlugin):
                 return False, f"Missing required argument: {arg_def['name']}"
             
             # If the argument is provided, validate its value
-            if arg_def["name"] in parameters:
+            if arg_def["name"] in parameters and parameters[arg_def["name"]] != "<UNK>":
                 value = parameters[arg_def["name"]]
-                
-                # Skip validation for unknown values
-                if value == "<UNK>":
-                    if arg_def.get("required", True):
-                        return False, f"Required argument {arg_def['name']} has unknown value"
-                    continue
                 
                 # Validate based on domain type
                 domain = arg_def.get("domain", {})
@@ -937,7 +1031,18 @@ class DocumentPlugin(BasePlugin):
                 if domain_type == "numeric_range":
                     try:
                         val = float(value)
-                        start, end = domain.get("values", [1, 1])
+                        
+                        # Get dynamic domain values if data_dependent
+                        if domain.get("data_dependent"):
+                            dynamic_domains = self._update_dynamic_domains()
+                            domain_key = f"{tool_name}.{arg_def['name']}"
+                            if domain_key in dynamic_domains:
+                                start, end = dynamic_domains[domain_key].get("values", [1, 1])
+                            else:
+                                start, end = domain.get("values", [1, 1])
+                        else:
+                            start, end = domain.get("values", [1, 1])
+                        
                         if not (start <= val <= end):
                             return False, f"Value {value} for {arg_def['name']} is out of range [{start}, {end}]"
                     except (ValueError, TypeError):
@@ -960,28 +1065,25 @@ class DocumentPlugin(BasePlugin):
     
     def get_domain_updates_from_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Update tool domains based on context."""
-        updates = {}
+        # Initialize from config if available
+        if "initial_config" in context and hasattr(self, "initialize_from_config"):
+            self.initialize_from_config(context["initial_config"])
         
         # Update the current context
-        self._current_context.update({
-            k: v for k, v in context.items() 
-            if k in ["number_of_pages", "pdf_name"]
-        })
+        if "number_of_pages" in context:
+            old_pages = self._current_context.get("number_of_pages", 1)
+            new_pages = context["number_of_pages"]
+            self._current_context["number_of_pages"] = new_pages
+            
+            # Only invalidate cache if page count actually changed
+            if old_pages != new_pages:
+                self._invalidate_domain_cache()
         
-        # Update numeric range domains based on number of pages
-        num_pages = self._current_context.get("number_of_pages", 1)
+        if "pdf_name" in context:
+            self._current_context["pdf_name"] = context["pdf_name"]
         
-        for tool in self._tools:
-            for arg in tool.get("arguments", []):
-                domain = arg.get("domain", {})
-                if domain.get("data_dependent"):
-                    if arg["name"] in ["page_num", "start", "end"]:
-                        updates[f"{tool['name']}.{arg['name']}"] = {
-                            "type": "numeric_range",
-                            "values": [1, num_pages]
-                        }
-
-        return updates
+        # Return dynamic domain updates
+        return self._update_dynamic_domains()
     
     def get_uncertainty_context(self) -> Dict[str, Any]:
         """Get document-specific context for uncertainty calculation."""
