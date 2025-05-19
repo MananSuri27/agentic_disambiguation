@@ -193,6 +193,20 @@ class Tool:
             "arguments": [arg.to_dict() for arg in self.arguments]
         }
     
+    def get_description(self):
+        tool_desc = f"Tool: {self.name}\nDescription: {self.description}\nArguments:"
+            
+        for arg in self.arguments:
+            arg_desc = f"  - {arg.name}: "
+            if arg.description:
+                arg_desc += f"{arg.description}"
+            if not arg.required:
+                arg_desc += f" (Optional, default: {arg.default})"
+            arg_desc += f" - {str(arg.domain)}"
+            tool_desc += f"\n{arg_desc}"
+
+        return tool_desc
+    
     def get_argument(self, name: str) -> Optional[Argument]:
         """Get an argument by name."""
         return self.argument_map.get(name)

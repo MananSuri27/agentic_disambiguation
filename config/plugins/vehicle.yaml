@@ -1,44 +1,14 @@
 name: vehicle_control
 module_path: plugins.vehicle_plugin
 class_name: VehicleControlPlugin
-description: "Plugin for vehicle control operations, managing car systems including engine, doors, climate control, lights, and safety systems."
+description: | 
+  Plugin for vehicle control operations, managing car systems including engine, doors, climate control, lights, and safety systems.
 
-prompt_templates:
-  tool_selection: |
-    You are an AI assistant that helps users with vehicle control operations.
-
-    User query: "{user_query}"
-
-    Available tools:
-    {tool_descriptions}
-
-    Please analyze the user's query and determine which tool(s) should be called to fulfill the request.
-    For each tool, specify all required parameters. If a parameter is uncertain, use "<UNK>" as the value.
-
-    Think through this step by step:
-    1. What vehicle operation is the user requesting?
-    2. What are the prerequisites for this operation (engine state, door locks, etc.)?
-    3. Which vehicle control tool(s) are needed to complete this task?
-    4. What parameters are needed for each tool?
-    5. Which parameters can be determined from the query, and which are uncertain?
-
-  question_generation: |
-    You are an AI assistant that helps users with vehicle control operations.
-
-    User query: "{user_query}"
-
-    I've determined that the following tool calls are needed, but some arguments are uncertain:
-
-    Tool Calls:
-    {tool_calls}
-
-    Uncertain Arguments:
-    {uncertain_args}
-
-    Your task is to generate clarification questions that would help resolve the uncertainty about specific arguments.
-
-    Instructions:
-    1. Generate questions that are clear, specific, and directly address the uncertain arguments
-    2. Each question should target one or more specific arguments
-    3. Questions should be conversational and easy for a user to understand
-    4. For each question, specify which tool and argument(s) it aims to clarify
+  VEHICLE CONTROL RULES:
+  - Check current state with displayCarStatus before operations
+  - Engine start prerequisites: brake fully pressed (pedalPosition=1.0) AND all doors locked
+  - Fuel amounts: 0-50 gallons (cannot exceed tank capacity)
+  - Speeds: 0-120 mph, must be multiples of 5
+  - Enum values are case-sensitive: "START"/"STOP", "on"/"off"/"auto"
+  - Cruise control only works when engine is running
+  - Fan speed: 0-100, Pedal position: 0-1, Temperature: reasonable ranges

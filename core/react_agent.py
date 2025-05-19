@@ -329,6 +329,48 @@ class ReactAgent:
         except Exception as e:
             logger.warning(f"Could not add final_answer virtual tool: {e}")
     
+    def _get_plugin_descriptions(self) -> str:
+        """Extract plugin descriptions from the plugin manager."""
+        plugin_descriptions = []
+        
+        for plugin_name, plugin in self.plugin_manager.plugins.items():
+            # Try to get description from plugin metadata
+            description = None
+            
+            # Method 1: Check if plugin has a description attribute
+            if hasattr(plugin, 'description'):
+                description = plugin.description
+            
+            # Method 2: Check if plugin has config with description
+            elif hasattr(plugin, 'config') and isinstance(plugin.config, dict):
+                description = plugin.config.get('description')
+            
+            # Method 3: Check plugin metadata
+            elif hasattr(plugin, 'metadata') and isinstance(plugin.metadata, dict):
+                description = plugin.metadata.get('description')
+            
+            # Method 4: Try to get from plugin class docstring
+            elif plugin.__class__.__doc__:
+                description = plugin.__class__.__doc__.strip()
+            
+            # Method 5: Check if plugin has a get_description method
+            elif hasattr(plugin, 'get_description'):
+                try:
+                    description = plugin.get_description()
+                except Exception as e:
+                    logger.debug(f"Failed to get description from {plugin_name}: {e}")
+            
+            # Format the description
+            if description:
+                plugin_descriptions.append(f"**{plugin_name}**: {description}")
+            else:
+                plugin_descriptions.append(f"**{plugin_name}**: Plugin for {plugin_name} operations")
+        
+        if plugin_descriptions:
+            return "\n".join(plugin_descriptions)
+        else:
+            return "No plugin descriptions available."
+    
     def run(self, request: str, context: Dict = None) -> AgentResult:
         """
         Execute the ReAct loop for a single request.
@@ -409,10 +451,15 @@ class ReactAgent:
     
     def _reason(self, request: str, observations: List[str]) -> Tuple[str, ToolCall]:
         """Reason about what tool to use next."""
-        # Build simple reasoning prompt
+        # Build simple reasoning prompt with plugin descriptions
         obs_text = "\n".join(f"- {obs}" for obs in observations) if observations else "None"
+        plugin_descriptions = self._get_plugin_descriptions()
         
         prompt = f"""You are an AI assistant helping with a user request.
+
+SYSTEM CONTEXT:
+You have access to the following tool domain:
+{plugin_descriptions}
 
 Request: {request}
 
@@ -422,7 +469,7 @@ Previous observations:
 Available tools:
 {self.tool_registry.get_tool_descriptions()}
 
-Think step by step about what tool to use next. If you have enough information to provide a final answer, use the final_answer tool.
+Think step by step about what tool to use next. Consider the plugin context above to understand the capabilities available to you. If you have enough information to provide a final answer, use the final_answer tool.
 
 Respond in JSON format:
 {{
@@ -513,20 +560,72 @@ Respond in JSON format:
         }
     
     def _handle_error(self, error_result: ToolExecutionResult, request: str, context: Dict) -> Dict:
-        """Handle execution errors."""
-        # Check if error is recoverable through reasoning
-        if self._is_recoverable_error(error_result):
-            return {
-                "needs_clarification": False,
-                "observation": f"Error occurred: {error_result.message}. Trying different approach."
-            }
-        else:
-            # Generate clarification question for the error
-            question = f"I encountered an error: {error_result.message}. Can you provide more information to help resolve this?"
-            return {
-                "needs_clarification": True,
-                "question": question
-            }
+        """Handle execution errors by attempting LLM-driven correction before asking for clarification."""
+        # First attempt: Use LLM to generate a corrected tool call
+        try:
+            # Get the tool information for context
+            tool_name = error_result.tool_name if hasattr(error_result, 'tool_name') else "unknown"
+            tool_info = None
+            
+            if tool_name != "unknown":
+                try:
+                    tool = self.tool_registry.get_tool(tool_name)
+                    tool_info = tool.get_description() if hasattr(tool, 'get_description') else str(tool)
+                except:
+                    tool_info = f"Tool: {tool_name} (description unavailable)"
+            
+            # Build the LLM prompt for error recovery
+            prompt = f"""You are helping fix a failed tool call.
+
+Original Request: {request}
+
+Tool Information:
+{tool_info or f"Tool: {tool_name}"}
+
+Error Details:
+{error_result.message}
+
+Based on the error and tool information, can you suggest how to fix this? 
+
+Respond in JSON format:
+{{
+    "can_fix": true/false,
+    "reasoning": "explanation of what went wrong and how to fix it",
+    "suggested_action": "retry_with_changes" or "different_tool" or "need_clarification",
+    "observation": "observation to add to context for next reasoning step"
+}}
+
+If you cannot determine a fix from the available information, set can_fix to false."""
+            
+            # Call LLM for error analysis
+            response = self.llm.generate_json(
+                prompt=prompt,
+                response_model={
+                    "can_fix": "boolean",
+                    "reasoning": "string", 
+                    "suggested_action": "string",
+                    "observation": "string"
+                },
+                max_tokens=1000
+            )
+            
+            # If LLM suggests it can fix the error, return recovery observation
+            if response.get("can_fix", False):
+                return {
+                    "needs_clarification": False,
+                    "observation": response.get("observation", f"Error occurred: {error_result.message}. LLM suggested: {response.get('reasoning', 'Retrying with adjustments.')}")
+                }
+                
+        except Exception as llm_error:
+            logger.warning(f"LLM error recovery failed: {llm_error}")
+        
+        # If LLM cannot fix or LLM call failed, fall back to asking for clarification
+        question = f"I encountered an error: {error_result.message}. Can you provide more information or clarify your request to help resolve this?"
+        return {
+            "needs_clarification": True,
+            "question": question
+        }
+
     
     def _is_recoverable_error(self, error_result: ToolExecutionResult) -> bool:
         """Check if an error can be recovered from through reasoning."""
