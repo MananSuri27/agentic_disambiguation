@@ -3,7 +3,6 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 import copy
 import random
 from datetime import datetime, time, timedelta
-from plugins.base_plugin import BasePlugin
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,6 @@ DEFAULT_STATE = {
         "balance": 10000.0,
         "binding_card": 1974202140965533,
     },
-    "authenticated": False,
     "market_status": "Closed",
     "order_counter": 12446,
     "stocks": {
@@ -126,13 +124,13 @@ DEFAULT_STATE = {
 class TradingBot:
     """
     A class representing a trading bot for executing stock trades and managing a trading account.
+    Authentication and account management are handled internally.
     """
     
     def __init__(self):
-        """Initialize the TradingBot instance."""
+        """Initialize the TradingBot instance with default state."""
         self.orders = {}
         self.account_info = {}
-        self.authenticated = False
         self.market_status = "Closed"
         self.order_counter = 0
         self.stocks = {}
@@ -140,6 +138,9 @@ class TradingBot:
         self.transaction_history = []
         self._api_description = "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information."
         self._random = random.Random(1053520)
+        
+        # Load default state
+        self._load_scenario(DEFAULT_STATE)
 
     def _load_scenario(self, scenario: dict) -> None:
         """
@@ -156,23 +157,12 @@ class TradingBot:
             for k, v in self.orders.items()
         }
         self.account_info = scenario.get("account_info", DEFAULT_STATE_COPY["account_info"])
-        self.authenticated = scenario.get(
-            "authenticated", DEFAULT_STATE_COPY["authenticated"]
-        )
-        self.market_status = scenario.get(
-            "market_status", DEFAULT_STATE_COPY["market_status"]
-        )
-        self.order_counter = scenario.get(
-            "order_counter", DEFAULT_STATE_COPY["order_counter"]
-        )
+        self.market_status = scenario.get("market_status", DEFAULT_STATE_COPY["market_status"])
+        self.order_counter = scenario.get("order_counter", DEFAULT_STATE_COPY["order_counter"])
         self.stocks = scenario.get("stocks", DEFAULT_STATE_COPY["stocks"])
         self.watch_list = scenario.get("watch_list", DEFAULT_STATE_COPY["watch_list"])
-        self.transaction_history = scenario.get(
-            "transaction_history", DEFAULT_STATE_COPY["transaction_history"]
-        )
-        self._random = random.Random(
-            (scenario.get("random_seed", DEFAULT_STATE_COPY["random_seed"]))
-        )
+        self.transaction_history = scenario.get("transaction_history", DEFAULT_STATE_COPY["transaction_history"])
+        self._random = random.Random(scenario.get("random_seed", DEFAULT_STATE_COPY["random_seed"]))
 
     def _generate_transaction_timestamp(self) -> str:
         """
@@ -218,7 +208,10 @@ class TradingBot:
         market_open_time = time(9, 30)  # Market opens at 9:30 AM
         market_close_time = time(16, 0)  # Market closes at 4:00 PM
 
-        current_time = datetime.strptime(current_time_str, "%I:%M %p").time()
+        try:
+            current_time = datetime.strptime(current_time_str, "%I:%M %p").time()
+        except ValueError:
+            return {"error": f"Invalid time format: {current_time_str}. Use HH:MM AM/PM format."}
 
         if market_open_time <= current_time <= market_close_time:
             self.market_status = "Open"
@@ -289,9 +282,8 @@ class TradingBot:
         """
         if order_id not in self.orders:
             return {
-                "error": f"Order with ID {order_id} not found."
-                + "Here is the list of orders_id: "
-                + str(list(self.orders.keys()))
+                "error": f"Order with ID {order_id} not found. "
+                + "Available order IDs: " + str(list(self.orders.keys()))
             }
         return self.orders[order_id]
 
@@ -309,7 +301,8 @@ class TradingBot:
         if order_id not in self.orders:
             return {"error": f"Order with ID {order_id} not found."}
         if self.orders[order_id]["status"] == "Completed":
-            return {"error": f"Can't cancel order {order_id}. Order is already completed."}
+            return {"error": f"Cannot cancel order {order_id}. Order is already completed."}
+        
         self.orders[order_id]["status"] = "Cancelled"
         return {"order_id": order_id, "status": "Cancelled"}
 
@@ -332,14 +325,15 @@ class TradingBot:
             price (float): Price at which the order was placed.
             amount (int): Number of shares in the order.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to place an order."}
         if symbol not in self.stocks:
             return {"error": f"Invalid stock symbol: {symbol}"}
         if price <= 0 or amount <= 0:
             return {"error": "Price and amount must be positive values."}
+        
         price = float(price)
+        self.order_counter += 1
         order_id = self.order_counter
+        
         self.orders[order_id] = {
             "id": order_id,
             "order_type": order_type,
@@ -348,8 +342,8 @@ class TradingBot:
             "amount": amount,
             "status": "Open",
         }
-        self.order_counter += 1
-        # We return the status as "Pending" to indicate that the order has been placed but not yet executed
+        
+        # Return the status as "Pending" to indicate that the order has been placed but not yet executed
         return {
             "order_id": order_id,
             "order_type": order_type,
@@ -358,14 +352,12 @@ class TradingBot:
             "amount": amount,
         }
 
-    def make_transaction(
-        self, account_id: int, xact_type: str, amount: float
-    ) -> Dict[str, Union[str, float]]:
+    def make_transaction(self, xact_type: str, amount: float) -> Dict[str, Union[str, float]]:
         """
         Make a deposit or withdrawal based on specified amount.
+        Uses the internal account automatically.
         
         Args:
-            account_id (int): ID of the account.
             xact_type (str): Transaction type (deposit or withdrawal).
             amount (float): Amount to deposit or withdraw.
             
@@ -373,12 +365,8 @@ class TradingBot:
             status (str): Status of the transaction.
             new_balance (float): Updated account balance after the transaction.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to make a transaction."}
         if self.market_status != "Open":
             return {"error": "Market is closed. Transactions are not allowed."}
-        if account_id != self.account_info["account_id"]:
-            return {"error": f"Account with ID {account_id} not found."}
         if amount <= 0:
             return {"error": "Transaction amount must be positive."}
 
@@ -421,49 +409,7 @@ class TradingBot:
             balance (float): Current balance of the account.
             binding_card (int): Card number associated with the account.
         """
-        if not self.authenticated:
-            return {
-                "error": "User not authenticated. Please log in to view account information."
-            }
         return self.account_info
-
-    def trading_login(self, username: str, password: str) -> Dict[str, str]:
-        """
-        Handle user login.
-        
-        Args:
-            username (str): Username for authentication.
-            password (str): Password for authentication.
-            
-        Returns:
-            status (str): Login status message.
-        """
-        if self.authenticated:
-            return {"status": "Already logged in"}
-        # In a real system, we would validate the username and password here
-        self.authenticated = True
-        return {"status": "Logged in successfully"}
-
-    def trading_get_login_status(self) -> Dict[str, bool]:
-        """
-        Get the login status.
-        
-        Returns:
-            status (bool): Login status.
-        """
-        return {"status": bool(self.authenticated)}
-
-    def trading_logout(self) -> Dict[str, str]:
-        """
-        Handle user logout for trading system.
-        
-        Returns:
-            status (str): Logout status message.
-        """
-        if not self.authenticated:
-            return {"status": "No user is currently logged in"}
-        self.authenticated = False
-        return {"status": "Logged out successfully"}
 
     def fund_account(self, amount: float) -> Dict[str, Union[str, float]]:
         """
@@ -476,10 +422,9 @@ class TradingBot:
             status (str): Status of the funding operation.
             new_balance (float): Updated account balance after funding.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to fund the account."}
         if amount <= 0:
             return {"error": "Funding amount must be positive."}
+        
         self.account_info["balance"] += amount
         self.transaction_history.append(
             {"type": "deposit", "amount": amount, "timestamp": self._generate_transaction_timestamp()}
@@ -499,12 +444,9 @@ class TradingBot:
         Returns:
             status (str): Status of the removal operation.
         """
-        if not self.authenticated:
-            return {
-                "error": "User not authenticated. Please log in to modify the watchlist."
-            }
         if symbol not in self.watch_list:
             return {"error": f"Stock {symbol} not found in watchlist."}
+        
         self.watch_list.remove(symbol)
         return {"status": f"Stock {symbol} removed from watchlist successfully."}
 
@@ -515,19 +457,15 @@ class TradingBot:
         Returns:
             watchlist (List[str]): List of stock symbols in the watchlist.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to view the watchlist."}
         return {"watchlist": self.watch_list}
 
-    def get_order_history(self) -> Dict[str, List[Dict[str, Union[str, int, float]]]]:
+    def get_order_history(self) -> Dict[str, List[int]]:
         """
         Get the stock order ID history.
         
         Returns:
-            order_history (List[int]): List of orders ID in the order history.
+            order_history (List[int]): List of order IDs in the order history.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to view order history."}
         return {"history": list(self.orders.keys())}
 
     def get_transaction_history(
@@ -546,26 +484,31 @@ class TradingBot:
                 - amount (float): Amount involved in the transaction.
                 - timestamp (str): Timestamp of the transaction, formatted as 'YYYY-MM-DD HH:MM:SS'.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to view transaction history."}
-
         if start_date:
-            start = datetime.strptime(start_date, "%Y-%m-%d")
+            try:
+                start = datetime.strptime(start_date, "%Y-%m-%d")
+            except ValueError:
+                return {"error": f"Invalid start_date format: {start_date}. Use YYYY-MM-DD."}
         else:
             start = datetime.min
 
         if end_date:
-            end = datetime.strptime(end_date, "%Y-%m-%d")
+            try:
+                end = datetime.strptime(end_date, "%Y-%m-%d")
+            except ValueError:
+                return {"error": f"Invalid end_date format: {end_date}. Use YYYY-MM-DD."}
         else:
             end = datetime.max
 
-        filtered_history = [
-            transaction
-            for transaction in self.transaction_history
-            if start
-            <= datetime.strptime(transaction["timestamp"], "%Y-%m-%d %H:%M:%S")
-            <= end
-        ]
+        filtered_history = []
+        for transaction in self.transaction_history:
+            try:
+                tx_time = datetime.strptime(transaction["timestamp"], "%Y-%m-%d %H:%M:%S")
+                if start <= tx_time <= end:
+                    filtered_history.append(transaction)
+            except (ValueError, KeyError):
+                # Skip malformed transaction entries
+                continue
 
         return {"transaction_history": filtered_history}
 
@@ -591,7 +534,12 @@ class TradingBot:
 
         old_price = self.stocks[symbol]["price"]
         self.stocks[symbol]["price"] = new_price
-        self.stocks[symbol]["percent_change"] = ((new_price - old_price) / old_price) * 100
+        
+        # Calculate percent change
+        if old_price > 0:
+            self.stocks[symbol]["percent_change"] = ((new_price - old_price) / old_price) * 100
+        else:
+            self.stocks[symbol]["percent_change"] = 0.0
 
         return {"symbol": symbol, "old_price": old_price, "new_price": new_price}
 
@@ -607,7 +555,10 @@ class TradingBot:
         """
         sector_map = {
             "Technology": ["AAPL", "GOOG", "MSFT", "NVDA"],
-            "Automobile": ["TSLA", "F", "GM"],
+            "Automobile": ["TSLA"],
+            "Healthcare": ["NEPT"],
+            "Finance": ["ALPH"],
+            "Energy": ["OMEG"],
         }
         return {"stock_list": sector_map.get(sector, [])}
 
@@ -625,15 +576,21 @@ class TradingBot:
         Returns:
             filtered_stocks (List[str]): Filtered list of stock symbols within the price range.
         """
-        filtered_stocks = [
-            symbol
-            for symbol in stocks
-            if self.stocks.get(symbol, {}).get("price", 0) >= min_price
-            and self.stocks.get(symbol, {}).get("price", 0) <= max_price
-        ]
+        if min_price < 0 or max_price < 0:
+            return {"error": "Price values must be non-negative."}
+        if min_price > max_price:
+            return {"error": "Minimum price cannot be greater than maximum price."}
+            
+        filtered_stocks = []
+        for symbol in stocks:
+            if symbol in self.stocks:
+                price = self.stocks[symbol].get("price", 0)
+                if min_price <= price <= max_price:
+                    filtered_stocks.append(symbol)
+                    
         return {"filtered_stocks": filtered_stocks}
 
-    def add_to_watchlist(self, stock: str) -> Dict[str, List[str]]:
+    def add_to_watchlist(self, stock: str) -> Dict[str, Union[List[str], str]]:
         """
         Add a stock to the watchlist.
         
@@ -641,17 +598,15 @@ class TradingBot:
             stock (str): the stock symbol to add to the watchlist.
             
         Returns:
-            symbol (str): the symbol that were successfully added to the watchlist.
+            watchlist (List[str]): the updated watchlist after adding the stock.
         """
-        if not self.authenticated:
-            return {"error": "User not authenticated. Please log in to modify the watchlist."}
-            
+        if stock not in self.stocks:
+            return {"error": f"Stock {stock} not found."}
+        
         if stock not in self.watch_list:
-            if stock in self.stocks:  # Ensure symbol is valid
-                self.watch_list.append(stock)
-            else:
-                return {"error": f"Stock {stock} not found."}
-        return {"symbol": self.watch_list}
+            self.watch_list.append(stock)
+            
+        return {"watchlist": self.watch_list}
 
     def notify_price_change(self, stocks: List[str], threshold: float) -> Dict[str, str]:
         """
@@ -664,31 +619,52 @@ class TradingBot:
         Returns:
             notification (str): Notification message about the price changes.
         """
-        changed_stocks = [
-            symbol
-            for symbol in stocks
-            if symbol in self.stocks
-            and abs(self.stocks[symbol]["percent_change"]) >= threshold
-        ]
+        if threshold < 0:
+            return {"error": "Threshold must be non-negative."}
+            
+        changed_stocks = []
+        for symbol in stocks:
+            if symbol in self.stocks:
+                percent_change = abs(self.stocks[symbol].get("percent_change", 0))
+                if percent_change >= threshold:
+                    changed_stocks.append(symbol)
 
         if changed_stocks:
             return {"notification": f"Stocks {', '.join(changed_stocks)} have significant price changes."}
         else:
             return {"notification": "No significant price changes in the selected stocks."}
+    
+    import logging
+from typing import Dict, List, Any, Optional, Tuple, Union
+import copy
+from plugins.base_plugin import BasePlugin
+
+logger = logging.getLogger(__name__)
 
 
 class TradingPlugin(BasePlugin):
     """Plugin for stock trading operations.
     
-    This plugin provides tools for stock trading, account management, and market data.
+    This plugin provides tools for stock trading, market data, and account management
+    with dynamic domain updates and proper type casting. Authentication is handled
+    internally and account management is simplified.
     """
     
     def __init__(self):
         """Initialize the trading plugin."""
+        # Import here to avoid circular imports
+        from trading_api import TradingBot
         self.trading_bot = TradingBot()
         self._name = "trading"
         self._description = "Plugin for stock trading operations"
         self._tools = self._generate_tool_definitions()
+        
+        # Cache for dynamic domains - invalidated when state changes
+        self._domain_cache = None
+        self._state_changing_operations = {
+            'place_order', 'cancel_order', 'make_transaction', 'fund_account',
+            'remove_stock_from_watchlist', 'add_to_watchlist', 'update_stock_price'
+        }
     
     @property
     def name(self) -> str:
@@ -839,17 +815,6 @@ class TradingPlugin(BasePlugin):
                 "description": "Make a deposit or withdrawal transaction",
                 "arguments": [
                     {
-                        "name": "account_id",
-                        "description": "ID of the account",
-                        "domain": {
-                            "type": "numeric_range",
-                            "values": [1, 100000],
-                            "importance": 0.9,
-                            "data_dependent": True
-                        },
-                        "required": True
-                    },
-                    {
                         "name": "xact_type",
                         "description": "Type of transaction",
                         "domain": {
@@ -874,40 +839,6 @@ class TradingPlugin(BasePlugin):
             {
                 "name": "get_account_info",
                 "description": "Get information about the user's account",
-                "arguments": []
-            },
-            {
-                "name": "trading_login",
-                "description": "Log in to the trading system",
-                "arguments": [
-                    {
-                        "name": "username",
-                        "description": "Username for authentication",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    },
-                    {
-                        "name": "password",
-                        "description": "Password for authentication",
-                        "domain": {
-                            "type": "string",
-                            "importance": 0.9
-                        },
-                        "required": True
-                    }
-                ]
-            },
-            {
-                "name": "trading_get_login_status",
-                "description": "Check if the user is logged in",
-                "arguments": []
-            },
-            {
-                "name": "trading_logout",
-                "description": "Log out from the trading system",
                 "arguments": []
             },
             {
@@ -1097,237 +1028,70 @@ class TradingPlugin(BasePlugin):
                 ]
             }
         ]
+    
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get the list of tools provided by this plugin."""
         return self._tools
+    
+    def _invalidate_domain_cache(self):
+        """Invalidate the domain cache when trading system state changes."""
+        self._domain_cache = None
+    
+    def _update_dynamic_domains(self) -> Dict[str, Any]:
+        """Update domains based on current trading system state."""
+        if self._domain_cache is not None:
+            return self._domain_cache
+        
+        try:
+            updates = {}
+            
+            # Update stock symbol domains
+            stock_symbols = list(self.trading_bot.stocks.keys())
+            if stock_symbols:
+                # Update all tools that use stock symbols
+                stock_symbol_fields = [
+                    "get_stock_info.symbol",
+                    "place_order.symbol", 
+                    "remove_stock_from_watchlist.symbol",
+                    "update_stock_price.symbol",
+                    "add_to_watchlist.stock"
+                ]
+                for field in stock_symbol_fields:
+                    updates[field] = {
+                        "type": "finite",
+                        "values": stock_symbols
+                    }
+            
+            # Update watchlist domains - only stocks currently in watchlist can be removed
+            watchlist = self.trading_bot.watch_list
+            if watchlist:
+                updates["remove_stock_from_watchlist.symbol"] = {
+                    "type": "finite",
+                    "values": watchlist
+                }
+            
+            # Update order ID domains
+            order_ids = list(self.trading_bot.orders.keys())
+            if order_ids:
+                for tool_name in ["get_order_details", "cancel_order"]:
+                    updates[f"{tool_name}.order_id"] = {
+                        "type": "finite",
+                        "values": order_ids
+                    }
+            
+            # Cache the result
+            self._domain_cache = updates
+            return updates
+            
+        except Exception as e:
+            logger.error(f"Error updating dynamic domains: {e}")
+            return {}
     
     def initialize_from_config(self, config_data: Dict[str, Any]) -> bool:
         """Initialize the trading bot from configuration data."""
         if "TradingBot" in config_data:
             trading_config = config_data["TradingBot"]
             self.trading_bot._load_scenario(trading_config)
+            self._invalidate_domain_cache()  # Invalidate cache after loading
             return True
         return False
-    
-    def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool with the given parameters."""
-        # Validate parameters first
-        is_valid, error = self.validate_tool_call(tool_name, parameters)
-        if not is_valid:
-            return {
-                "success": False,
-                "message": error,
-                "error": "INVALID_PARAMETERS"
-            }
-        
-        try:
-            # Call the corresponding method on the trading bot
-            trading_method = getattr(self.trading_bot, tool_name)
-            result = trading_method(**parameters)
-            
-            # Handle different result formats
-            if isinstance(result, dict) and "error" in result:
-                return {
-                    "success": False,
-                    "message": result["error"],
-                    "error": "OPERATION_FAILED"
-                }
-            else:
-                return {
-                    "success": True,
-                    "message": f"Successfully executed {tool_name}",
-                    "output": result
-                }
-        except Exception as e:
-            logger.exception(f"Error executing {tool_name}: {e}")
-            return {
-                "success": False,
-                "message": str(e),
-                "error": "EXECUTION_ERROR"
-            }
-    
-    def validate_tool_call(self, tool_name: str, parameters: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-        """Validate a tool call before execution."""
-        # Find the tool definition
-        tool_def = None
-        for tool in self._tools:
-            if tool["name"] == tool_name:
-                tool_def = tool
-                break
-        
-        if not tool_def:
-            return False, f"Unknown tool: {tool_name}"
-        
-        # Check required arguments
-        for arg_def in tool_def.get("arguments", []):
-            if arg_def.get("required", True) and arg_def["name"] not in parameters:
-                return False, f"Missing required argument: {arg_def['name']}"
-            
-            # If the argument is provided, validate its value
-            if arg_def["name"] in parameters and parameters[arg_def["name"]] != "<UNK>":
-                value = parameters[arg_def["name"]]
-                
-                # Validate based on domain type
-                domain = arg_def.get("domain", {})
-                domain_type = domain.get("type", "string")
-                
-                if domain_type == "numeric_range":
-                    try:
-                        val = float(value)
-                        start, end = domain.get("values", [0, 0])
-                        if not (start <= val <= end):
-                            return False, f"Value {value} for {arg_def['name']} is out of range [{start}, {end}]"
-                    except (ValueError, TypeError):
-                        return False, f"Invalid numeric value for {arg_def['name']}: {value}"
-                
-                elif domain_type == "finite":
-                    if value not in domain.get("values", []):
-                        values_str = ", ".join(str(v) for v in domain.get("values", []))
-                        return False, f"Invalid value for {arg_def['name']}: {value}. Expected one of: {values_str}"
-                
-                elif domain_type == "boolean":
-                    if not isinstance(value, bool) and value not in [True, False, "true", "false", "True", "False"]:
-                        return False, f"Invalid boolean value for {arg_def['name']}: {value}"
-                
-                elif domain_type == "list":
-                    if not isinstance(value, list):
-                        return False, f"Invalid list value for {arg_def['name']}: {value}"
-        
-        return True, None
-    
-    def get_domain_updates_from_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Update tool domains based on context."""
-        updates = {}
-        
-        # Initialize from config if available
-        if "initial_config" in context and "TradingBot" in context["initial_config"]:
-            self.initialize_from_config(context["initial_config"])
-        
-        # Update stock symbol domains
-        stock_symbols = list(self.trading_bot.stocks.keys())
-        if stock_symbols:
-            # Update all tools that use stock symbols
-            for tool_name in ["get_stock_info", "place_order", "remove_stock_from_watchlist", 
-                             "update_stock_price", "add_to_watchlist"]:
-                if tool_name in ["get_stock_info", "place_order", "update_stock_price"]:
-                    arg_name = "symbol"
-                elif tool_name == "remove_stock_from_watchlist":
-                    arg_name = "symbol"
-                elif tool_name == "add_to_watchlist":
-                    arg_name = "stock"
-                
-                updates[f"{tool_name}.{arg_name}"] = {
-                    "type": "finite",
-                    "values": stock_symbols
-                }
-        
-        # Update watchlist domains
-        watchlist = self.trading_bot.watch_list
-        if watchlist:
-            updates["remove_stock_from_watchlist.symbol"] = {
-                "type": "finite",
-                "values": watchlist
-            }
-        
-        # Update order ID domains
-        order_ids = list(self.trading_bot.orders.keys())
-        if order_ids:
-            for tool_name in ["get_order_details", "cancel_order"]:
-                updates[f"{tool_name}.order_id"] = {
-                    "type": "finite",
-                    "values": order_ids
-                }
-        
-        # Update account ID domains
-        account_id = self.trading_bot.account_info.get("account_id")
-        if account_id:
-            updates["make_transaction.account_id"] = {
-                "type": "finite",
-                "values": [account_id]
-            }
-            
-        return updates
-    
-    def get_uncertainty_context(self) -> Dict[str, Any]:
-        """Get trading-specific context for uncertainty calculation."""
-        return {
-            "market_status": self.trading_bot.market_status,
-            "authenticated": self.trading_bot.authenticated,
-            "available_stocks": list(self.trading_bot.stocks.keys()),
-            "watchlist": self.trading_bot.watch_list,
-            "order_ids": list(self.trading_bot.orders.keys()),
-            "account_id": self.trading_bot.account_info.get("account_id")
-        }
-    
-    def get_prompt_templates(self) -> Dict[str, str]:
-        """Get trading-specific prompt templates."""
-        return {
-            "tool_selection": """
-You are an AI assistant that helps users with stock trading operations.
-
-Conversation history:
-{conversation_history}
-
-User query: "{user_query}"
-
-Available tools:
-{tool_descriptions}
-
-Please analyze the user's query and determine which tool(s) should be called to fulfill the request.
-For each tool, specify all required parameters. If a parameter is uncertain, use "<UNK>" as the value.
-
-Think through this step by step:
-1. What is the user trying to do with the trading system?
-2. Which trading operation(s) are needed to complete this task?
-3. What parameters are needed for each operation?
-4. Which parameters can be determined from the query, and which are uncertain?
-
-Return your response as a JSON object with the following structure:
-{
-  "reasoning": "Your step-by-step reasoning about what tools to use and why",
-  "tool_calls": [
-    {
-      "tool_name": "name_of_tool",
-      "arguments": {
-        "arg1": "value1",
-        "arg2": "<UNK>"
-      }
-    }
-  ]
-}
-""",
-            "question_generation": """
-You are an AI assistant that helps users with stock trading operations.
-
-Conversation history:
-{conversation_history}
-
-Original user query: "{user_query}"
-
-I've determined that the following tool calls are needed, but some arguments are uncertain:
-
-Tool Calls:
-{tool_calls}
-
-Uncertain Arguments:
-{uncertain_args}
-
-Your task is to generate clarification questions that would help resolve the uncertainty about specific arguments.
-
-Instructions:
-1. Generate questions that are clear, specific, and directly address the uncertain arguments
-2. Each question should target one or more specific arguments
-3. Questions should be conversational and easy for a user to understand
-4. For each question, specify which tool and argument(s) it aims to clarify
-
-Return your response as a JSON object with the following structure:
-{
-  "questions": [
-    {
-      "question": "A clear question to ask the user",
-      "target_args": [["tool_name", "arg_name"], ["tool_name", "other_arg_name"]]
-    }
-  ]
-}
-"""
-        }
