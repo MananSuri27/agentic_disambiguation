@@ -49,6 +49,15 @@ class APIAdapter(BasePlugin):
     
     def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with the given parameters."""
+        # Cast parameters first using the base class method
+        casted_params, cast_error = self._cast_parameters(tool_name, parameters)
+        if cast_error:
+            return {
+                "success": False,
+                "message": f"Parameter casting error: {cast_error}",
+                "error": "TYPE_CASTING_ERROR"
+            }
+        
         # Find the corresponding API method for this tool
         method_name = self._method_map.get(tool_name)
         if not method_name or not hasattr(self.api, method_name):
@@ -59,7 +68,7 @@ class APIAdapter(BasePlugin):
             }
         
         # Apply parameter transformations if needed
-        transformed_params = self._transform_parameters(tool_name, parameters)
+        transformed_params = self._transform_parameters(tool_name, casted_params)
         
         # Call the API method
         try:

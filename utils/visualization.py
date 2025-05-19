@@ -176,19 +176,8 @@ class ResultsVisualizer:
                     max_metrics[metric].append(0)
         
         # Calculate threshold for each turn based on total clarifications
-        thresholds = [self.calculate_threshold(t, total_clarifications_by_turn.get(t, 0)) for t in turns]
-        
-        # Create a custom colormap for the uncertainty background
-        cmap = plt.cm.get_cmap('Blues_r')
-        
-        # Create a custom background to represent uncertainty
-        for t in range(len(turns)-1):
-            certainty = avg_metrics['certainty'][t]
-            # Inverse of certainty = uncertainty
-            uncertainty = 1.0 - certainty
-            # Use uncertainty to determine color intensity (fading as certainty increases)
-            color = cmap(uncertainty * 0.7)  # Scale to ensure visibility
-            plt.axvspan(turns[t], turns[t+1], color=color, alpha=0.3)
+        # Using base threshold of 1.5 with increment of 0.2
+        thresholds = [1.5 + 0.2 * total_clarifications_by_turn.get(t, 0) for t in turns]
         
         # Determine y-axis scale
         y_max = max(
@@ -209,22 +198,17 @@ class ResultsVisualizer:
             plt.fill_between(turns, min_metrics[metric], max_metrics[metric],
                             alpha=0.2, color=self.colors[metric], label=f'Min/Max {metric.replace("_", " ").title()}')
         
-        # Plot threshold line with annotation
+        # Plot threshold line
         threshold_line = plt.plot(turns, thresholds, '--', color=self.colors['threshold'], 
                                 linewidth=3, label='Dynamic Threshold')
-        
-        # Annotate threshold formula
-        formula = r"$\tau = \tau_0 \cdot (1 + \alpha \cdot N)$"
-        plt.annotate(formula, xy=(0.02, 0.97), xycoords='axes fraction',
-                    fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
         
         # Add annotations for threshold crossings
         for t in turns:
             if max_metrics['ucb_score'][t] >= thresholds[t]:
                 # Highlight crossings with star
                 plt.scatter([t], [max_metrics['ucb_score'][t]], s=200,
-                           marker='*', color='gold', edgecolor='black', zorder=10,
-                           label='Threshold Crossed' if t == turns[0] else "")
+                        marker='*', color='gold', edgecolor='black', zorder=10,
+                        label='Threshold Crossed' if t == turns[0] else "")
                 
                 # Add annotation for the first few crossings
                 if t <= 2:  # Limit annotations to avoid clutter
@@ -233,30 +217,7 @@ class ResultsVisualizer:
                                 arrowprops=dict(facecolor='black', shrink=0.05, width=1.5, headwidth=8),
                                 fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
         
-        # Show certainty as an inverse-scaled marker size on the same plot
-        certainties = avg_metrics['certainty']
-        # Scale marker sizes: larger = more uncertain
-        marker_sizes = [1000 * (1.0 - c + 0.1) for c in certainties]  # Add 0.1 to ensure visibility for high certainty
-        
-        # Scatter plot to show certainty
-        scatter = plt.scatter(turns, [y_max * 0.05] * len(turns), s=marker_sizes, 
-                             c=certainties, cmap='RdYlGn', alpha=0.7, 
-                             edgecolors='black', linewidths=1, zorder=5)
-        
-        # Add colorbar for certainty
-        cbar = plt.colorbar(scatter, orientation='vertical', pad=0.01, fraction=0.05)
-        cbar.set_label('Certainty Level', fontsize=12)
-        
-        # Add text labels for certainty
-        for i, c in enumerate(certainties):
-            if i % 2 == 0:  # Label every other point to avoid clutter
-                plt.annotate(f"{c:.2f}", xy=(turns[i], y_max * 0.05),
-                            xytext=(turns[i], y_max * 0.12),
-                            fontsize=9, ha='center',
-                            arrowprops=dict(arrowstyle='->', lw=1))
-        
-        # Additional UI enhancements
-        plt.title('Metrics Evolution & Uncertainty Analysis', fontsize=18, fontweight='bold', pad=20)
+        # UI enhancements
         plt.xlabel('Turn Number', fontsize=14, fontweight='bold')
         plt.ylabel('Metric Value', fontsize=14, fontweight='bold')
         
@@ -271,10 +232,7 @@ class ResultsVisualizer:
             Line2D([0], [0], color=self.colors['threshold'], lw=3, linestyle='--', label='Dynamic Threshold'),
             # Threshold crossing
             Line2D([0], [0], marker='*', color='w', markerfacecolor='gold', markersize=15, 
-                  markeredgecolor='black', label='Threshold Crossed'),
-            # Certainty
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10, 
-                  markeredgecolor='black', label='Certainty (larger=less certain)')
+                markeredgecolor='black', label='Threshold Crossed')
         ]
         
         plt.legend(handles=legend_elements, loc='upper left', fontsize=12, framealpha=0.95)
@@ -285,21 +243,13 @@ class ResultsVisualizer:
         # Use integer ticks for x-axis
         plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
         
-        # Add a descriptive subtitle
-        plt.figtext(0.5, 0.01, 
-                   "This visualization shows how question selection metrics evolve over conversation turns.\n"
-                   "Background color intensity represents uncertainty (darker = more uncertain).\n"
-                   "Circle size indicates certainty level (larger = less certain).", 
-                   ha='center', fontsize=11, bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="gray", alpha=0.8))
-        
-        plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+        plt.tight_layout()
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Visualization saved to {save_path}")
         else:
             plt.show()
-    
     def visualize_question_metrics(self, save_path: Optional[str] = None) -> None:
         """
         Create visualization of question metrics by type of argument targeted.

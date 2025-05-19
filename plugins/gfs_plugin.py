@@ -1,4 +1,3 @@
-
 from typing import Dict, List, Any, Optional, Tuple, Union
 import logging
 import copy
@@ -366,377 +365,13 @@ class GorillaFileSystem:
         recursive_search(target_dir, path.rstrip("/"))
         return {"matches": matches}
 
-    def wc(self, file_name: str, mode: str = "l") -> Dict[str, Union[int, str]]:
-        """
-        Count the number of lines, words, and characters in a file of any extension from current directory.
-
-        Args:
-            file_name (str): Name of the file of current directory to perform wc operation on.
-            mode (str): Mode of operation ('l' for lines, 'w' for words, 'c' for characters).
-
-        Returns:
-            count (int): The count of the number of lines, words, or characters in the file.
-            type (str): The type of unit we are counting. [Enum]: ["lines", "words", "characters"]
-        """
-        if mode not in ["l", "w", "c"]:
-            return {"error": f"wc: invalid mode '{mode}'"}
-
-        if file_name in self._current_dir.contents:
-            file = self._current_dir._get_item(file_name)
-            if isinstance(file, File):
-                content = file._read()
-
-                if mode == "l":
-                    line_count = len(content.splitlines())
-                    return {"count": line_count, "type": "lines"}
-
-                elif mode == "w":
-                    word_count = len(content.split())
-                    return {"count": word_count, "type": "words"}
-
-                elif mode == "c":
-                    char_count = len(content)
-                    return {"count": char_count, "type": "characters"}
-
-        return {"error": f"wc: {file_name}: No such file or directory"}
-
-    def sort(self, file_name: str) -> Dict[str, str]:
-        """
-        Sort the contents of a file line by line.
-
-        Args:
-            file_name (str): The name of the file appeared at current directory to sort.
-
-        Returns:
-            sorted_content (str): The sorted content of the file.
-        """
-        if file_name in self._current_dir.contents:
-            file = self._current_dir._get_item(file_name)
-            if isinstance(file, File):
-                content = file._read()
-
-                sorted_content = "\n".join(sorted(content.splitlines()))
-
-                return {"sorted_content": sorted_content}
-
-        return {"error": f"sort: {file_name}: No such file or directory"}
-
-    def grep(self, file_name: str, pattern: str) -> Dict[str, List[str]]:
-        """
-        Search for lines in a file of any extension at current directory that contain the specified pattern.
-
-        Args:
-            file_name (str): The name of the file to search. No path is allowed and you can only perform on file at local directory.
-            pattern (str): The pattern to search for.
-
-        Returns:
-            matching_lines (List[str]): Lines that match the pattern.
-        """
-        if file_name in self._current_dir.contents:
-            file = self._current_dir._get_item(file_name)
-            if isinstance(file, File):
-                content = file._read()
-
-                matching_lines = [line for line in content.splitlines() if pattern in line]
-
-                return {"matching_lines": matching_lines}
-
-        return {"error": f"grep: {file_name}: No such file or directory"}
-
-    def du(self, human_readable: bool = False) -> Dict[str, str]:
-        """
-        Estimate the disk usage of a directory and its contents.
-
-        Args:
-            human_readable (bool): If True, returns the size in human-readable format (e.g., KB, MB).
-
-        Returns:
-            disk_usage (str): The estimated disk usage.
-        """
-
-        def get_size(item: Union[File, Directory]) -> int:
-            if isinstance(item, File):
-                return len(item._read().encode("utf-8"))
-            elif isinstance(item, Directory):
-                return sum(get_size(child) for child in item.contents.values())
-            return 0
-
-        target_dir = self._navigate_to_directory(None)
-        if isinstance(target_dir, dict):  # Error condition check
-            return target_dir
-
-        total_size = get_size(target_dir)
-
-        if human_readable:
-            for unit in ["B", "KB", "MB", "GB", "TB"]:
-                if total_size < 1024:
-                    size_str = f"{total_size:.2f} {unit}"
-                    break
-                total_size /= 1024
-            else:
-                size_str = f"{total_size:.2f} PB"
-        else:
-            size_str = f"{total_size} bytes"
-
-        return {"disk_usage": size_str}
-
-    def tail(self, file_name: str, lines: int = 10) -> Dict[str, str]:
-        """
-        Display the last part of a file of any extension.
-
-        Args:
-            file_name (str): The name of the file to display. No path is allowed and you can only perform on file at local directory.
-            lines (int): The number of lines to display from the end of the file. Defaults to 10.
-
-        Returns:
-            last_lines (str): The last part of the file.
-        """
-        if file_name in self._current_dir.contents:
-            file = self._current_dir._get_item(file_name)
-            if isinstance(file, File):
-                content = file._read().splitlines()
-
-                if lines > len(content):
-                    lines = len(content)
-
-                last_lines = content[-lines:]
-                return {"last_lines": "\n".join(last_lines)}
-
-        return {"error": f"tail: {file_name}: No such file or directory"}
-
-    def diff(self, file_name1: str, file_name2: str) -> Dict[str, str]:
-        """
-        Compare two files of any extension line by line at the current directory.
-
-        Args:
-            file_name1 (str): The name of the first file in current directory.
-            file_name2 (str): The name of the second file in current directorry.
-
-        Returns:
-            diff_lines (str): The differences between the two files.
-        """
-        if (
-            file_name1 in self._current_dir.contents
-            and file_name2 in self._current_dir.contents
-        ):
-            file1 = self._current_dir._get_item(file_name1)
-            file2 = self._current_dir._get_item(file_name2)
-
-            if isinstance(file1, File) and isinstance(file2, File):
-                content1 = file1._read().splitlines()
-                content2 = file2._read().splitlines()
-
-                diff_lines = [
-                    f"- {line1}\n+ {line2}"
-                    for line1, line2 in zip(content1, content2)
-                    if line1 != line2
-                ]
-
-                return {"diff_lines": "\n".join(diff_lines)}
-
-        return {"error": f"diff: {file_name1} or {file_name2}: No such file or directory"}
-
-    def mv(self, source: str, destination: str) -> Dict[str, str]:
-        """
-        Move a file or directory from one location to another. so
-
-        Args:
-            source (str): Source name of the file or directory to move. Source must be local to the current directory.
-            destination (str): The destination name to move the file or directory to. Destination must be local to the current directory and cannot be a path. If destination is not an existing directory like when renaming something, destination is the new file name.
-
-        Returns:
-            result (str): The result of the move operation.
-        """
-        if source not in self._current_dir.contents:
-            return {"error": f"mv: cannot move '{source}': No such file or directory"}
-
-        item = self._current_dir._get_item(source)
-
-        if not isinstance(item, (File, Directory)):
-            return {"error": f"mv: cannot move '{source}': Not a file or directory"}
-
-        if "/" in destination:
-            return {
-                "error": f"mv: no path allowed in destination. Only file name and folder name is supported for this operation."
-            }
-
-        # Check if the destination is an existing directory
-        if destination in self._current_dir.contents:
-            dest_item = self._current_dir._get_item(destination)
-            if isinstance(dest_item, Directory):
-                # Move source into the destination directory
-                new_destination = f"{source}"
-                if new_destination in dest_item.contents:
-                    return {
-                        "error": f"mv: cannot move '{source}' to '{destination}/{source}': File exists"
-                    }
-                else:
-                    self._current_dir.contents.pop(source)
-                    if isinstance(item, File):
-                        dest_item._add_file(source, item.content)
-                    else:
-                        dest_item._add_directory(source)
-                        dest_item.contents[source].contents = item.contents
-                    return {"result": f"'{source}' moved to '{destination}/{source}'"}
-            else:
-                return {
-                    "error": f"mv: cannot move '{source}' to '{destination}': Not a directory"
-                }
-        else:
-            # Destination is not an existing directory, move/rename the item
-            self._current_dir.contents.pop(source)
-            if isinstance(item, File):
-                self._current_dir._add_file(destination, item.content)
-            else:
-                self._current_dir._add_directory(destination)
-                self._current_dir.contents[destination].contents = item.contents
-            return {"result": f"'{source}' moved to '{destination}'"}
-
-    def rm(self, file_name: str) -> Dict[str, str]:
-        """
-        Remove a file or directory.
-
-        Args:
-            file_name (str): The name of the file or directory to remove.
-
-        Returns:
-            result (str): The result of the remove operation.
-        """
-        if file_name in self._current_dir.contents:
-            item = self._current_dir._get_item(file_name)
-            if isinstance(item, File) or isinstance(item, Directory):
-                self._current_dir.contents.pop(file_name)
-                return {"result": f"'{file_name}' removed"}
-            else:
-                return {
-                    "error": f"rm: cannot remove '{file_name}': Not a file or directory"
-                }
-        else:
-            return {"error": f"rm: cannot remove '{file_name}': No such file or directory"}
-
-    def rmdir(self, dir_name: str) -> Dict[str, str]:
-        """
-        Remove a directory at current directory.
-
-        Args:
-            dir_name (str): The name of the directory to remove. Directory must be local to the current directory.
-
-        Returns:
-            result (str): The result of the remove operation.
-        """
-        if dir_name in self._current_dir.contents:
-            item = self._current_dir._get_item(dir_name)
-            if isinstance(item, Directory):
-                if item.contents:  # Check if directory is not empty
-                    return {
-                        "error": f"rmdir: failed to remove '{dir_name}': Directory not empty"
-                    }
-                else:
-                    self._current_dir.contents.pop(dir_name)
-                    return {"result": f"'{dir_name}' removed"}
-            else:
-                return {"error": f"rmdir: cannot remove '{dir_name}': Not a directory"}
-        else:
-            return {
-                "error": f"rmdir: cannot remove '{dir_name}': No such file or directory"
-            }
-
-    def cp(self, source: str, destination: str) -> Dict[str, str]:
-        """
-        Copy a file or directory from one location to another.
-
-        If the destination is a directory, the source file or directory will be copied
-        into the destination directory.
-
-        Both source and destination must be local to the current directory.
-
-        Args:
-            source (str): The name of the file or directory to copy.
-            destination (str): The destination name to copy the file or directory to.
-                            If the destination is a directory, the source will be copied
-                            into this directory. No file paths allowed.
-
-        Returns:
-            result (str): The result of the copy operation or an error message if the operation fails.
-        """
-        if source not in self._current_dir.contents:
-            return {"error": f"cp: cannot copy '{source}': No such file or directory"}
-
-        item = self._current_dir._get_item(source)
-
-        if not isinstance(item, (File, Directory)):
-            return {"error": f"cp: cannot copy '{source}': Not a file or directory"}
-
-        if "/" in destination:
-            return {
-                "error": f"cp: don't allow path in destination. Only file name and folder name is supported for this operation."
-            }
-        # Check if the destination is an existing directory
-        if destination in self._current_dir.contents:
-            dest_item = self._current_dir._get_item(destination)
-            if isinstance(dest_item, Directory):
-                # Copy source into the destination directory
-                new_destination = f"{destination}/{source}"
-                if source in dest_item.contents:
-                    return {
-                        "error": f"cp: cannot copy '{source}' to '{destination}/{source}': File exists"
-                    }
-                else:
-                    if isinstance(item, File):
-                        dest_item._add_file(source, item.content)
-                    else:
-                        dest_item._add_directory(source)
-                        dest_item.contents[source].contents = item.contents.copy()
-                    return {"result": f"'{source}' copied to '{destination}/{source}'"}
-            else:
-                return {
-                    "error": f"cp: cannot copy '{source}' to '{destination}': Not a directory"
-                }
-        else:
-            # Destination is not an existing directory, perform the copy
-            if isinstance(item, File):
-                self._current_dir._add_file(destination, item.content)
-            else:
-                self._current_dir._add_directory(destination)
-                self._current_dir.contents[destination].contents = item.contents.copy()
-            return {"result": f"'{source}' copied to '{destination}'"}
-
-    def _navigate_to_directory(
-        self, path: Optional[str]
-    ) -> Union[Directory, Dict[str, str]]:
-        """
-        Navigate to a specified directory path from the current directory.
-
-        Args:
-            path (str): [Optional] The path to navigate to. Defaults to None (current directory).
-
-        Returns:
-            target_directory (Directory or dict): The target directory object or error message.
-        """
-        if path is None or path == ".":
-            return self._current_dir
-        elif path == "/":
-            return self.root
-
-        dirs = path.strip("/").split("/")
-        temp_dir = self._current_dir if not path.startswith("/") else self.root
-
-        for dir_name in dirs:
-            next_dir = temp_dir._get_item(dir_name)
-            if isinstance(next_dir, Directory):
-                temp_dir = next_dir
-            else:
-                return {"error": f"cd: '{path}': No such file or directory"}
-
-        return temp_dir
-
 
 class GFSPlugin(BasePlugin):
     """Plugin for the Gorilla File System.
     
     This plugin provides tools for interacting with a simple file system, allowing
     users to navigate directories, create and manipulate files, and perform various
-    file operations.
+    file operations with dynamic domain updates and type casting.
     """
     
     def __init__(self):
@@ -745,6 +380,12 @@ class GFSPlugin(BasePlugin):
         self._name = "gfs"
         self._description = "Plugin for file system operations"
         self._tools = self._generate_tool_definitions()
+        
+        # Cache for dynamic domains - invalidated when file system state changes
+        self._domain_cache = None
+        self._state_changing_operations = {
+            'cd', 'mkdir', 'touch', 'echo', 'mv', 'rm', 'rmdir', 'cp'
+        }
     
     @property
     def name(self) -> str:
@@ -1120,18 +761,119 @@ class GFSPlugin(BasePlugin):
         """Get the list of tools provided by this plugin."""
         return self._tools
     
+    def _invalidate_domain_cache(self):
+        """Invalidate the domain cache when file system state changes."""
+        self._domain_cache = None
+    
+    def _update_dynamic_domains(self) -> Dict[str, Any]:
+        """Update domains based on current file system state."""
+        if self._domain_cache is not None:
+            return self._domain_cache
+        
+        try:
+            # Get current directory contents
+            current_contents = self.file_system.ls().get("current_directory_content", [])
+            
+            # Separate files and directories
+            files = []
+            directories = []
+            for item_name in current_contents:
+                item = self.file_system._current_dir._get_item(item_name)
+                if isinstance(item, File):
+                    files.append(item_name)
+                elif isinstance(item, Directory):
+                    directories.append(item_name)
+            
+            # Build domain updates
+            updates = {}
+            
+            # Update cd domain - only directories plus special values
+            updates["cd.folder"] = {
+                "type": "finite",
+                "values": directories + ["..", "/"]
+            }
+            
+            # Update file-based operations domains
+            file_operations = ["cat", "wc", "sort", "grep", "tail"]
+            for op in file_operations:
+                updates[f"{op}.file_name"] = {
+                    "type": "finite",
+                    "values": files
+                }
+            
+            # Update diff domains
+            updates["diff.file_name1"] = {
+                "type": "finite", 
+                "values": files
+            }
+            updates["diff.file_name2"] = {
+                "type": "finite",
+                "values": files
+            }
+            
+            # Update mv and cp source domains
+            all_items = files + directories
+            updates["mv.source"] = {
+                "type": "finite",
+                "values": all_items
+            }
+            updates["cp.source"] = {
+                "type": "finite", 
+                "values": all_items
+            }
+            
+            # Update mv and cp destination domains (can be existing items for overwrite/move-into)
+            updates["mv.destination"] = {
+                "type": "finite",
+                "values": all_items
+            }
+            updates["cp.destination"] = {
+                "type": "finite",
+                "values": all_items
+            }
+            
+            # Update rm domain
+            updates["rm.file_name"] = {
+                "type": "finite",
+                "values": all_items
+            }
+            
+            # Update rmdir domain - only directories
+            updates["rmdir.dir_name"] = {
+                "type": "finite",
+                "values": directories
+            }
+            
+            # Cache the result
+            self._domain_cache = updates
+            return updates
+            
+        except Exception as e:
+            logger.error(f"Error updating dynamic domains: {e}")
+            return {}
+    
     def initialize_from_config(self, config_data: Dict[str, Any]) -> bool:
         """Initialize the file system from configuration data."""
         if "GorillaFileSystem" in config_data:
             gfs_config = config_data["GorillaFileSystem"]
             self.file_system._load_scenario(gfs_config)
+            self._invalidate_domain_cache()  # Invalidate cache after loading
             return True
         return False
     
     def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with the given parameters."""
-        # Validate parameters first
-        is_valid, error = self.validate_tool_call(tool_name, parameters)
+        # Cast parameters first using the base class method
+        casted_params, cast_error = self._cast_parameters(tool_name, parameters)
+        if cast_error:
+            return {
+                "success": False,
+                "message": f"Parameter casting error: {cast_error}",
+                "error": "TYPE_CASTING_ERROR"
+            }
+        
+        # Validate parameters
+        is_valid, error = self.validate_tool_call(tool_name, casted_params)
         if not is_valid:
             return {
                 "success": False,
@@ -1142,7 +884,11 @@ class GFSPlugin(BasePlugin):
         try:
             # Call the corresponding method on the file system
             gfs_method = getattr(self.file_system, tool_name)
-            result = gfs_method(**parameters)
+            result = gfs_method(**casted_params)
+            
+            # Invalidate domain cache if this was a state-changing operation
+            if tool_name in self._state_changing_operations:
+                self._invalidate_domain_cache()
             
             # Handle different result formats
             if result is None:
@@ -1205,8 +951,19 @@ class GFSPlugin(BasePlugin):
                         return False, f"Invalid numeric value for {arg_def['name']}: {value}"
                 
                 elif domain_type == "finite":
-                    if value not in domain.get("values", []):
-                        values_str = ", ".join(str(v) for v in domain.get("values", []))
+                    # Get dynamic domain values if data_dependent
+                    if domain.get("data_dependent"):
+                        dynamic_domains = self._update_dynamic_domains()
+                        domain_key = f"{tool_name}.{arg_def['name']}"
+                        if domain_key in dynamic_domains:
+                            valid_values = dynamic_domains[domain_key].get("values", [])
+                        else:
+                            valid_values = domain.get("values", [])
+                    else:
+                        valid_values = domain.get("values", [])
+                    
+                    if value not in valid_values:
+                        values_str = ", ".join(str(v) for v in valid_values)
                         return False, f"Invalid value for {arg_def['name']}: {value}. Expected one of: {values_str}"
                 
                 elif domain_type == "boolean":
@@ -1217,86 +974,12 @@ class GFSPlugin(BasePlugin):
     
     def get_domain_updates_from_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Update tool domains based on context."""
-        updates = {}
-        
         # Initialize from config if available
         if "initial_config" in context and hasattr(self, "initialize_from_config"):
             self.initialize_from_config(context["initial_config"])
         
-        # Get current directory contents
-        try:
-            current_contents = self.file_system.ls().get("current_directory_content", [])
-            
-            # Get file and directory lists
-            files = []
-            directories = []
-            for item_name in current_contents:
-                item = self.file_system._current_dir._get_item(item_name)
-                if isinstance(item, File):
-                    files.append(item_name)
-                elif isinstance(item, Directory):
-                    directories.append(item_name)
-            
-            # Update cd domain
-            updates["cd.folder"] = {
-                "type": "finite",
-                "values": directories + ["..", "/"]
-            }
-            
-            # Update file-based operations domains
-            file_operations = ["cat", "wc", "sort", "grep", "tail"]
-            for op in file_operations:
-                updates[f"{op}.file_name"] = {
-                    "type": "finite",
-                    "values": files
-                }
-            
-            # Update diff domains
-            updates["diff.file_name1"] = {
-                "type": "finite",
-                "values": files
-            }
-            updates["diff.file_name2"] = {
-                "type": "finite",
-                "values": files
-            }
-            
-            # Update mv and cp source domains
-            updates["mv.source"] = {
-                "type": "finite",
-                "values": files + directories
-            }
-            updates["cp.source"] = {
-                "type": "finite",
-                "values": files + directories
-            }
-            
-            # Update mv and cp destination domains
-            updates["mv.destination"] = {
-                "type": "finite",
-                "values": files + directories
-            }
-            updates["cp.destination"] = {
-                "type": "finite",
-                "values": files + directories
-            }
-            
-            # Update rm domain
-            updates["rm.file_name"] = {
-                "type": "finite",
-                "values": files + directories
-            }
-            
-            # Update rmdir domain
-            updates["rmdir.dir_name"] = {
-                "type": "finite",
-                "values": directories
-            }
-            
-        except Exception as e:
-            logger.error(f"Error updating domains: {e}")
-            
-        return updates
+        # Return dynamic domain updates
+        return self._update_dynamic_domains()
     
     def get_uncertainty_context(self) -> Dict[str, Any]:
         """Get file system-specific context for uncertainty calculation."""
