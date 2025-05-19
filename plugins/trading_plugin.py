@@ -649,6 +649,8 @@ class TradingPlugin(BasePlugin):
     
     def __init__(self):
         """Initialize the trading plugin."""
+        super().__init__()
+
         self.trading_bot = TradingBot()
         self._name = "trading"
         self._description = "Plugin for stock trading operations"

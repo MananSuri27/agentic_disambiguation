@@ -30,8 +30,8 @@ EXECUTION_CONFIG = {
 
 # Simulation Configuration
 SIMULATION_CONFIG = {
-    "data_dir": "/fs/nexus-scratch/manans/disambiguation/data/test_domains",  # Directory for simulation data
-    "results_dir": "simulation_results_test_domains",  # Directory for simulation results
+    "data_dir": "/fs/nexus-scratch/manans/disambiguation/data/simulation_test_samples",  # Directory for simulation data
+    "results_dir": "simulation_results_test_base",  # Directory for simulation results
     "log_dir": "logs",  # Directory for logs
     "max_turns": 10  # Maximum number of conversation turns
 }

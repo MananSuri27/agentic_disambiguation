@@ -51,7 +51,7 @@ class ToolExecutionResult:
 
 
 class ToolExecutor:
-    """Class for executing tool calls."""
+    """Class for executing tool calls with virtual tool support."""
     
     def __init__(
         self,
@@ -80,18 +80,21 @@ class ToolExecutor:
         Returns:
             Tuple of (is_valid, error_message)
         """
+        # Get the plugin for this tool
+        plugin = self.plugin_manager.get_plugin_for_tool(tool_call.tool_name)
+        if plugin:
+            # Use plugin-specific validation with virtual tool support
+            return plugin.validate_tool_call_with_virtual_support(
+                tool_call.tool_name, 
+                tool_call.arguments
+            )
+        
+        # Fallback to tool registry validation for tools without plugins
         tool = self.tool_registry.get_tool(tool_call.tool_name)
         if not tool:
             return False, f"Unknown tool: {tool_call.tool_name}"
             
-        # Get the plugin for this tool to use its validation logic
-        plugin = self.plugin_manager.get_plugin_for_tool(tool_call.tool_name)
-        if plugin:
-            # Use plugin-specific validation if available
-            return plugin.validate_tool_call(tool_call.tool_name, tool_call.arguments)
-        
-        # Fall back to generic validation using the tool registry
-        # Check required arguments
+        # Check required arguments using tool registry
         for arg in tool.arguments:
             if arg.required and (arg.name not in tool_call.arguments or tool_call.arguments[arg.name] == "<UNK>"):
                 return False, f"Missing required argument: {arg.name}"
@@ -159,7 +162,7 @@ class ToolExecutor:
     
     def execute_tool_call(self, tool_call: ToolCall) -> ToolExecutionResult:
         """
-        Execute a single tool call.
+        Execute a single tool call with virtual tool support.
         
         Args:
             tool_call: Tool call to execute
@@ -180,12 +183,19 @@ class ToolExecutor:
         # Get the plugin for this tool
         plugin = self.plugin_manager.get_plugin_for_tool(tool_call.tool_name)
         if not plugin:
-            return ToolExecutionResult(
-                tool_name=tool_call.tool_name,
-                success=False,
-                message=f"No plugin found for tool: {tool_call.tool_name}",
-                error="PLUGIN_NOT_FOUND"
-            )
+            # Special case: check if this is a virtual tool in any plugin
+            for plugin_name, p in self.plugin_manager.plugins.items():
+                if hasattr(p, '_is_virtual_tool') and p._is_virtual_tool(tool_call.tool_name):
+                    plugin = p
+                    break
+            
+            if not plugin:
+                return ToolExecutionResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    message=f"No plugin found for tool: {tool_call.tool_name}",
+                    error="PLUGIN_NOT_FOUND"
+                )
         
         # Prepare parameters for execution (filter out <UNK> values)
         parameters = {
@@ -194,8 +204,8 @@ class ToolExecutor:
         }
         
         try:
-            # Execute the tool call via the plugin
-            result = plugin.execute_tool(
+            # Execute the tool call via the plugin with virtual tool support
+            result = plugin.execute_tool_with_virtual_support(
                 tool_name=tool_call.tool_name,
                 parameters=parameters
             )
@@ -247,6 +257,18 @@ class ToolExecutor:
         
         return results
     
+    def is_final_answer_tool(self, tool_call: ToolCall) -> bool:
+        """
+        Check if a tool call is the final_answer tool.
+        
+        Args:
+            tool_call: Tool call to check
+            
+        Returns:
+            True if this is the final_answer tool
+        """
+        return tool_call.tool_name == "final_answer"
+    
     def generate_error_clarification(
         self, 
         error_result: ToolExecutionResult, 
@@ -283,10 +305,12 @@ Error message: {error_result.message}
 Current tool calls:
 {[tc.to_dict() for tc in tool_calls]}
 
+Available tools:
+{tool_descriptions}
+
 Based on the error, I need two things:
 1. A clear, conversational clarification question to ask the user to help resolve the error
 2. An updated version of the tool calls that might resolve the error if the user doesn't provide more information
-3. Make sure names of the arguments are correct.
 
 Return your response as a JSON object with the following structure:
 {{

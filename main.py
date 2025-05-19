@@ -6,7 +6,6 @@ Main entry point for the agentic disambiguation system.
 import argparse
 import logging
 import os
-import copy
 import uuid
 import json
 import sys
@@ -18,15 +17,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.plugin_manager import PluginManager
 from core.tool_registry import ToolRegistry
-from core.uncertainty import UncertaintyCalculator, ToolCall
-from core.question_generation import QuestionGenerator, ClarificationQuestion
+from core.uncertainty import UncertaintyCalculator
+from core.question_generation import QuestionGenerator
 from core.tool_executor import ToolExecutor
+from core.react_agent import ReactAgent
 
 from llm.provider import LLMProvider
 from llm.ollama import OllamaProvider
 from llm.simulation import UserSimulator
 
-from simulation.mock_api import MockAPIClient
 from simulation.evaluation import SimulationEvaluator, SimulationVisualizer
 from simulation.data_loader import SimulationDataLoader
 
@@ -37,16 +36,9 @@ import config
 
 logger = None  # Will be initialized in main
 
+
 def initialize_llm_provider(llm_config: Dict[str, Any]) -> LLMProvider:
-    """
-    Initialize the LLM provider from configuration.
-    
-    Args:
-        llm_config: LLM configuration
-        
-    Returns:
-        Initialized LLM provider
-    """
+    """Initialize the LLM provider from configuration."""
     provider_type = llm_config.get("provider", "ollama")
     
     if provider_type == "ollama":
@@ -59,16 +51,9 @@ def initialize_llm_provider(llm_config: Dict[str, Any]) -> LLMProvider:
         # Default to Ollama
         return OllamaProvider()
 
+
 def determine_plugin_from_simulation_data(simulation_data: Dict[str, Any]) -> Optional[str]:
-    """
-    Determine which plugin to load based on the simulation data.
-    
-    Args:
-        simulation_data: The simulation data dictionary
-        
-    Returns:
-        Plugin name to load, or None if can't determine
-    """
+    """Determine which plugin to load based on the simulation data."""
     # Check for explicit primary_api field
     if "primary_api" in simulation_data:
         api_name = simulation_data["primary_api"]
@@ -77,88 +62,16 @@ def determine_plugin_from_simulation_data(simulation_data: Dict[str, Any]) -> Op
             "GorillaFileSystem": "gfs",
             "TravelAPI": "travel", 
             "TradingBot": "trading",
-            "VehicleControlAPI": "vehicle_control",
+            "VehicleControlAPI": "vehicle",
             "DocumentPlugin": "document"
         }
         return api_to_plugin.get(api_name)
     
-    # # Check initial_config for API types
-    # if "initial_config" in simulation_data:
-    #     config = simulation_data["initial_config"]
-    #     if "GorillaFileSystem" in config:
-    #         return "gfs"
-    #     elif "TravelAPI" in config:
-    #         return "travel"
-    #     elif "TradingBot" in config:
-    #         return "trading"
-    #     elif "VehicleControlAPI" in config:
-    #         return "vehicle_control"
-    #     elif "DocumentPlugin" in config:
-    #         return "document"
-    
-    # # Check ground truth tool calls to infer plugin
-    # if "ground_truth_tool_calls" in simulation_data:
-    #     tool_calls = simulation_data["ground_truth_tool_calls"]
-    #     if tool_calls:
-    #         # Extract tool names and try to map to plugins
-    #         tool_names = {call.get("tool_name", "") for call in tool_calls}
-            
-    #         # GFS tools
-    #         gfs_tools = {"pwd", "ls", "cd", "mkdir", "touch", "echo", "cat", "find", 
-    #                     "wc", "sort", "grep", "du", "tail", "diff", "mv", "rm", "rmdir", "cp"}
-    #         if tool_names.intersection(gfs_tools):
-    #             return "gfs"
-            
-    #         # Travel tools
-    #         travel_tools = {"get_budget_fiscal_year", "register_credit_card", "get_flight_cost", 
-    #                        "get_credit_card_balance", "book_flight", "retrieve_invoice", "list_all_airports",
-    #                        "cancel_booking", "compute_exchange_rate", "verify_traveler_information",
-    #                        "set_budget_limit", "get_nearest_airport_by_city", "purchase_insurance",
-    #                        "contact_customer_support", "get_all_credit_cards"}
-    #         if tool_names.intersection(travel_tools):
-    #             return "travel"
-            
-    #         # Trading tools
-    #         trading_tools = {"get_current_time", "update_market_status", "get_symbol_by_name",
-    #                         "get_stock_info", "get_order_details", "cancel_order", "place_order",
-    #                         "make_transaction", "get_account_info", "fund_account", "remove_stock_from_watchlist",
-    #                         "get_watchlist", "get_order_history", "get_transaction_history", "update_stock_price",
-    #                         "get_available_stocks", "filter_stocks_by_price", "add_to_watchlist", "notify_price_change"}
-    #         if tool_names.intersection(trading_tools):
-    #             return "trading"
-            
-    #         # Vehicle tools
-    #         vehicle_tools = {"startEngine", "fillFuelTank", "lockDoors", "adjustClimateControl",
-    #                         "get_outside_temperature_from_google", "get_outside_temperature_from_weather_com",
-    #                         "setHeadlights", "displayCarStatus", "activateParkingBrake", "pressBrakePedal",
-    #                         "releaseBrakePedal", "setCruiseControl", "get_current_speed", "display_log",
-    #                         "estimate_drive_feasibility_by_mileage", "liter_to_gallon", "gallon_to_liter",
-    #                         "estimate_distance", "get_zipcode_based_on_city", "set_navigation",
-    #                         "check_tire_pressure", "find_nearest_tire_shop"}
-    #         if tool_names.intersection(vehicle_tools):
-    #             return "vehicle_control"
-            
-    #         # Document tools
-    #         document_tools = {"duplicate", "rename", "search", "count_pages", "compress_file", "convert",
-    #                          "add_comment", "redact_page_range", "redact_text", "highlight_text", "underline_text",
-    #                          "extract_pages", "delete_page", "delete_page_range", "add_signature",
-    #                          "add_page_with_text", "add_watermark", "add_password"}
-    #         if tool_names.intersection(document_tools):
-    #             return "document"
-    
     return None
 
+
 def initialize_components(plugin_name: str, simulation_data: Optional[Dict[str, Any]] = None) -> Tuple[PluginManager, ToolRegistry, LLMProvider, UncertaintyCalculator, QuestionGenerator]:
-    """
-    Initialize system components with the specified plugin.
-    
-    Args:
-        plugin_name: Name of the plugin to load
-        simulation_data: Optional simulation data for initialization
-        
-    Returns:
-        Tuple of (plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator)
-    """
+    """Initialize system components with the specified plugin."""
     # Initialize the plugin manager
     plugin_manager = PluginManager(plugin_config_dir="config/plugins")
     
@@ -216,24 +129,14 @@ def initialize_components(plugin_name: str, simulation_data: Optional[Dict[str, 
     
     return plugin_manager, tool_registry, llm_provider, uncertainty_calculator, question_generator
 
+
 def generate_output_filename(input_filename: str) -> str:
-    """
-    Generate output filename by appending _RESULT to the input filename.
-    
-    Args:
-        input_filename: Original input filename
-        
-    Returns:
-        Output filename
-    """
-    # Extract the filename without extension and the extension
+    """Generate output filename by appending _RESULT to the input filename."""
     base = os.path.basename(input_filename)
     name, ext = os.path.splitext(base)
-    
-    # Create new filename with _RESULT suffix
     output_filename = f"{name}_RESULT{ext}"
-    
     return output_filename
+
 
 def run_simulation(
     simulation_data: Dict[str, Any],
@@ -266,26 +169,24 @@ def run_simulation(
     # Extract simulation data
     user_query = simulation_data.get("user_query", "")
     user_intent = simulation_data.get("user_intention", "")
+    follow_ups = simulation_data.get("follow_ups", [])
     ground_truth = simulation_data
     
-    # Extract API-specific context and pass it to the relevant plugins
+    # Extract API-specific context and pass it to relevant plugins
     context = {
         k: v for k, v in simulation_data.items() 
         if k not in ["user_query", "user_intention", "ground_truth_tool_calls", "follow_ups"]
     }
-
-    # If we have an initial_config, make sure it's included in the context
+    
+    # Ensure initial_config is included in context
     if "initial_config" in simulation_data and "initial_config" not in context:
         context["initial_config"] = simulation_data["initial_config"]
     
     # Update tool registry with data-dependent domains
     tool_registry.update_domain_from_data(context)
     
-    # Initialize tool executor
+    # Initialize components
     tool_executor = ToolExecutor(tool_registry, plugin_manager)
-    
-    # Initialize the React Agent
-    from core.react_agent import ReactAgent
     agent = ReactAgent(
         llm_provider=llm_provider,
         tool_registry=tool_registry,
@@ -295,252 +196,95 @@ def run_simulation(
         plugin_manager=plugin_manager,
         config=question_config
     )
-    
-    # Initialize user simulator
     user_simulator = UserSimulator(
         llm_provider=llm_provider,
         ground_truth=ground_truth,
         user_intent=user_intent
     )
     
-    # Initialize conversation tracking - THE MASTER CONVERSATION
-    conversation = []
-    all_tool_calls = []
-    all_execution_results = []
+    # Process all requests (initial + follow-ups)
+    all_requests = [("initial", user_query)] + [("follow_up", req) for req in follow_ups]
+    max_clarifications = simulation_config.get("max_clarifications_per_request", 5)
     
-    # Avoid duplicate messages with a simple message ID system
-    seen_messages = set()
-    
-    # Add initial user query to conversation
-    conversation.append({
-        "role": "user",
-        "message": user_query,
-        "type": "initial"
-    })
-    
-    # Main simulation loop
-    turn_count = 0
-    max_turns = simulation_config.get("max_turns", 10)
-    current_user_input = user_query
-    
-    # Process the initial query
-    while turn_count < max_turns:
-        turn_count += 1
-        logger.info(f"Turn {turn_count} of {max_turns}")
+    for request_type, request_text in all_requests:
+        logger.info(f"Processing {request_type} request: {request_text}")
         
-        # Process the current user input through the agent
-        is_initial = (turn_count == 1)
+        # Start tracking this request
+        agent.start_new_request(request_text, request_type)
         
-        # Process the user input
-        logger.info(f"Processing user input: {current_user_input}")
-        agent_response = agent.process_user_input(current_user_input, is_initial=is_initial)
+        # Fresh context for each request (observations reset)
+        request_context = {"observations": []}
+        current_request = request_text
         
-        # Extract the agent message
-        agent_message = agent_response["agent_message"]
-        agent_message_text = agent_message["message"]
-        
-        # Add to conversation history (deduplicate by content)
-        message_id = hash(agent_message_text)
-        if message_id not in seen_messages:
-            seen_messages.add(message_id)
-            conversation.append(agent_message)
-            logger.info(f"Agent: {agent_message_text}")
-        else:
-            logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
-        
-        # Record the results
-        if "tool_calls" in agent_response and agent_response["tool_calls"]:
-            all_tool_calls.extend(agent_response["tool_calls"])
-        
-        if "execution_results" in agent_response and agent_response["execution_results"]:
-            all_execution_results.extend(agent_response["execution_results"])
-        
-        # Get the conversation status from the agent's response
-        conversation_status = agent_response.get("conversation_status", "awaiting_further_requests")
-        logger.info(f"Agent conversation status: {conversation_status}")
-        
-        if conversation_status == "awaiting_clarification":
-            # The agent needs clarification from the user
-            clarification_question = agent_message_text
-            logger.info(f"Agent needs clarification: {clarification_question}")
+        # Clarification loop for this request
+        clarifications_made = 0
+        while clarifications_made < max_clarifications:
+            # Run the agent
+            result = agent.run(current_request, request_context)
             
-            # Get user response
-            user_response = user_simulator.get_response_to_question(clarification_question)
-            
-            # If user has no response (conversation complete), break the loop
-            if user_response is None:
-                logger.info("User simulator has no response to clarification request, ending conversation.")
+            if result.success:
+                # Request completed successfully
+                logger.info(f"Request completed: {result.message}")
+                executed_tools = [
+                    tc for tc in agent.get_compatibility_data()["final_tool_calls"]
+                    if tc.get("request_index") == len(agent.conversation_tracker.requests) - 1
+                ]
+                agent.complete_current_request(True, result.message, executed_tools)
                 break
-            
-            logger.info(f"User response to clarification: {user_response}")
-            
-            # Add user response to conversation
-            conversation.append({
-                "role": "user",
-                "message": user_response,
-                "type": "clarification_response"
-            })
-            
-            # Process the clarification response
-            logger.info("Processing clarification response")
-            clarification_response = agent.process_clarification_response(
-                user_response,
-                agent_response.get("potential_tool_calls", [])
-            )
-            
-            # Extract the agent response message
-            agent_message = clarification_response["agent_message"]
-            agent_message_text = agent_message["message"]
-            
-            # Add to conversation history (deduplicate by content)
-            message_id = hash(agent_message_text)
-            if message_id not in seen_messages:
-                seen_messages.add(message_id)
-                conversation.append(agent_message)
-                logger.info(f"Agent (after clarification): {agent_message_text}")
-            else:
-                logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
-            
-            # Record the results
-            if "tool_calls" in clarification_response and clarification_response["tool_calls"]:
-                all_tool_calls.extend(clarification_response["tool_calls"])
-            
-            if "execution_results" in clarification_response and clarification_response["execution_results"]:
-                all_execution_results.extend(clarification_response["execution_results"])
-            
-            # Check if we need another clarification or can continue
-            next_status = clarification_response.get("conversation_status", "awaiting_further_requests")
-        
                 
-            # If we need another clarification, process this without continuing the loop
-            while next_status == "awaiting_clarification":
-                # Get the new clarification question
-                clarification_question = agent_message_text
-                logger.info(f"Additional clarification needed: {clarification_question}")
+            elif result.type in ["clarification", "error_clarification"]:
+                # Agent needs clarification
+                logger.info(f"Agent needs clarification: {result.message}")
                 
-                # Get user response to this new clarification
-                user_response = user_simulator.get_response_to_question(clarification_question)
+                # Get user response
+                user_response = user_simulator.get_response_to_question(result.message)
                 
-                # If user has no response, break both loops
                 if user_response is None:
-                    logger.info("User simulator has no response to clarification request, ending conversation.")
-                    break_outer = True
+                    # User done with requests
+                    logger.info("User has no response to clarification, ending this request")
+                    agent.complete_current_request(False, "Incomplete due to lack of clarification", [])
                     break
-                    
-                logger.info(f"User response to additional clarification: {user_response}")
                 
-                # Add this user response to the conversation
-                conversation.append({
-                    "role": "user",
-                    "message": user_response,
-                    "type": "clarification_response"
-                })
+                logger.info(f"User clarification: {user_response}")
                 
-                # Process this new clarification response
-                logger.info("Processing additional clarification response")
-                clarification_response = agent.process_clarification_response(
-                    user_response,
-                    clarification_response.get("potential_tool_calls", [])
-                )
+                # Enrich the request with clarification
+                current_request = agent.process_clarification(request_text, user_response)
+                clarifications_made += 1
                 
-                # Extract the agent response message
-                agent_message = clarification_response["agent_message"]
-                agent_message_text = agent_message["message"]
+                # Continue loop with enriched request and SAME context (observations persist)
                 
-                # Add to conversation history
-                message_id = hash(agent_message_text)
-                if message_id not in seen_messages:
-                    seen_messages.add(message_id)
-                    conversation.append(agent_message)
-                    logger.info(f"Agent (after additional clarification): {agent_message_text}")
-                else:
-                    logger.warning(f"Skipping duplicate agent message: {agent_message_text}")
-                
-                # Update results tracking
-                if "tool_calls" in clarification_response and clarification_response["tool_calls"]:
-                    all_tool_calls.extend(clarification_response["tool_calls"])
-                
-                if "execution_results" in clarification_response and clarification_response["execution_results"]:
-                    all_execution_results.extend(clarification_response["execution_results"])
-                
-                # Check if we need yet another clarification
-                next_status = clarification_response.get("conversation_status", "awaiting_further_requests")
-
-        
-        # Check if the last agent message contains an "anything else" question
-        # If so, use get_response_to_question which knows how to handle these specifically
-        if agent_message_text and user_simulator._is_follow_up_question(agent_message_text):
-            logger.info("Agent asked a follow-up question, handling with get_response_to_question")
-            user_response = user_simulator.get_response_to_question(agent_message_text)
-            
-            # If user has no more responses, add a closure message and end conversation
-            if user_response is None:
-                logger.info("User has no more requests, adding closure message")
-                
-                # Add closure message to conversation
-                closure_message = "No, that's all I needed. Thank you!"
-                conversation.append({
-                    "role": "user",
-                    "message": closure_message,
-                    "type": "follow_up"
-                })
-                logger.info(f"User closure message: {closure_message}")
-                
-                # End the conversation
+            else:
+                # Some other error
+                logger.error(f"Request failed: {result.message}")
+                agent.complete_current_request(False, result.message, [])
                 break
-                
-            # Add follow-up to conversation
-            logger.info(f"User follow-up to 'anything else' question: {user_response}")
-            conversation.append({
-                "role": "user",
-                "message": user_response,
-                "type": "follow_up"
-            })
-            
-            # Update current user input for next loop
-            current_user_input = user_response
-            continue
         
-        # Otherwise, use get_next_request to determine if user has a follow-up
-        next_user_input = user_simulator.get_next_request(conversation)
-        
-        # If user has no more requests, break the loop
-        if next_user_input is None:
-            logger.info("User simulator has no more requests, ending conversation.")
-            break
-        
-        # Otherwise, add follow-up request to conversation and continue
-        logger.info(f"User follow-up request: {next_user_input}")
-        conversation.append({
-            "role": "user",
-            "message": next_user_input,
-            "type": "follow_up"
-        })
-        
-        # Update current user input for next loop
-        current_user_input = next_user_input
-        
-        # Check if we've reached the maximum number of turns
-        if turn_count >= max_turns:
-            logger.info("Maximum number of turns reached.")
-            break
+        if clarifications_made >= max_clarifications:
+            logger.warning(f"Request exceeded max clarifications ({max_clarifications})")
+            agent.complete_current_request(False, "Exceeded max clarifications", [])
     
-    # Get all tool call attempts and candidate questions
-    all_tool_call_attempts = agent.get_all_tool_call_attempts()
-    all_candidate_questions = agent.question_generator.get_all_candidate_questions()
+    # Export results in both formats
+    detailed_conversation = agent.get_full_conversation_data()
+    compatibility_data = agent.get_compatibility_data()
     
     # Prepare simulation result
     result = {
         "simulation_id": str(uuid.uuid4()),
         "user_query": user_query,
-        "final_tool_calls": all_tool_calls,
-        "execution_results": all_execution_results,
-        "conversation": conversation,
-        "questions": agent.question_history,
-        "all_candidate_questions": all_candidate_questions,
-        "all_tool_call_attempts": all_tool_call_attempts,
-        "turns": turn_count,
-        "success": all(result.get("success", False) for result in all_execution_results) if all_execution_results else False
+        
+        # Nested detailed structure
+        **detailed_conversation,
+        
+        # Flat compatibility structure
+        **compatibility_data,
+        
+        # Additional compatibility fields
+        "questions": compatibility_data.get("questions", []),
+        "all_candidate_questions": question_generator.get_all_candidate_questions(),
+        "success": all(req.request_result and req.request_result["success"] 
+                      for req in agent.conversation_tracker.requests),
+        "turns": detailed_conversation["metrics"]["total_turns"],
+        "execution_results": []  # Legacy field, can be derived from tool attempts
     }
     
     # Add evaluation metrics if we have ground truth
@@ -549,21 +293,24 @@ def run_simulation(
         evaluation_metrics = evaluator.evaluate_simulation(simulation_data, result)
         result["evaluation"] = evaluation_metrics
     
-    # If verbose, print conversation
+    # Display results if verbose
     if verbose:
         visualizer = SimulationVisualizer()
         print("\n" + "="*80)
         print("CONVERSATION:")
-        print(visualizer.visualize_conversation(conversation))
+        print(visualizer.visualize_conversation(compatibility_data["conversation"]))
         print("\n" + "="*80)
         print("TOOL CALLS:")
-        print(visualizer.visualize_tool_calls(all_tool_calls, "Final Tool Calls", all_tool_call_attempts))
+        print(visualizer.visualize_tool_calls(
+            compatibility_data["final_tool_calls"], 
+            "Final Tool Calls", 
+            compatibility_data["all_tool_call_attempts"]
+        ))
         if "evaluation" in result:
             print("\n" + "="*80)
             print("EVALUATION:")
             print(visualizer.visualize_metrics(result["evaluation"]))
         print("\n" + "="*80)
-    
     
     return result
 
@@ -622,7 +369,6 @@ def main():
             if args.output:
                 output_path = args.output
             else:
-                # Generate output filename based on input filename
                 output_filename = generate_output_filename(args.data)
                 output_path = os.path.join(results_dir, output_filename)
             
@@ -649,7 +395,6 @@ def main():
             if args.output:
                 output_path = args.output
             else:
-                # Generate output filename based on input filename
                 output_filename = generate_output_filename(args.data)
                 output_path = os.path.join(results_dir, output_filename)
             
@@ -665,7 +410,6 @@ def main():
             print(f"No simulation files found in {config.SIMULATION_CONFIG.get('data_dir', 'simulation_data')}")
             return
         
-        results = []
         successful_runs = 0
         failed_runs = 0
         
@@ -707,15 +451,12 @@ def main():
                 results_dir = config.SIMULATION_CONFIG.get("results_dir", "simulation_results")
                 os.makedirs(results_dir, exist_ok=True)
                 
-                # Generate output filename based on input filename
                 output_filename = generate_output_filename(file_path)
                 output_path = os.path.join(results_dir, output_filename)
                 
                 save_json(result, output_path, pretty=True)
                 logger.info(f"Saved result to {output_path}")
                 
-                # Store result for summary
-                results.append(result)
                 successful_runs += 1
                 
             except Exception as e:
@@ -742,11 +483,7 @@ def main():
                 save_json(error_result, output_path, pretty=True)
                 logger.info(f"Saved error result to {output_path}")
                 
-                # Keep track of failed runs
                 failed_runs += 1
-                results.append(error_result)
-                
-                # Continue to next simulation
                 continue
         
         # Create summary
@@ -762,6 +499,7 @@ def main():
         save_json(summary, summary_path, pretty=True)
         logger.info(f"Saved summary to {summary_path}")
         print(f"Completed {successful_runs} simulations successfully, {failed_runs} failed. See {summary_path} for details.")
+
 
 if __name__ == "__main__":
     main()

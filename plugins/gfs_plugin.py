@@ -857,6 +857,8 @@ class GFSPlugin(BasePlugin):
     
     def __init__(self):
         """Initialize the Gorilla File System plugin."""
+        super().__init__()
+
         self.file_system = GorillaFileSystem()
         self._name = "gfs"
         self._description = "Plugin for file system operations"

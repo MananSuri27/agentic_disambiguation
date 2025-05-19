@@ -653,6 +653,8 @@ class VehicleControlPlugin(BasePlugin):
     
     def __init__(self):
         """Initialize the Vehicle Control plugin."""
+        super().__init__()
+
         self.vehicle_api = VehicleControlAPI()
         self._name = "vehicle_control"
         self._description = "Plugin for vehicle control operations"

@@ -3,12 +3,136 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+
+
 class SimulationEvaluator:
     """Class for evaluating simulation results."""
     
     def __init__(self):
         """Initialize a simulation evaluator."""
         pass
+
+    def _extract_final_planned_calls(self, attempts: List[Dict]) -> List[Dict]:
+        """Extract the final planned state of each unique tool call."""
+        tool_call_map = {}
+        
+        for attempt in attempts:
+            tool_call = attempt.get("tool_call", {})
+            tool_name = tool_call.get("tool_name", "")
+            arguments = tool_call.get("arguments", {})
+            
+            # Create a signature based on tool name and arguments structure
+            # We use argument keys to identify the "same" tool call across attempts
+            arg_keys = sorted(arguments.keys())
+            signature = f"{tool_name}:{arg_keys}"
+            
+            # Keep the latest version of each unique tool call
+            # Later attempts in the list will overwrite earlier ones
+            tool_call_map[signature] = tool_call
+        
+        return list(tool_call_map.values())
+    
+    # def _extract_final_planned_calls(self, attempts: List[Dict]) -> List[Dict]:
+    #     """
+    #     Extract the final planned state of each unique tool call.
+        
+    #     Strategy:
+    #     1. Group attempts by tool name and argument structure
+    #     2. For each group, take the latest attempt that was planned to be executed
+    #     3. Return the tool call from that attempt
+    #     """
+    #     # Group attempts by tool signature
+    #     tool_groups = {}
+        
+    #     for i, attempt in enumerate(attempts):
+    #         tool_call = attempt.get("tool_call", {})
+    #         tool_name = tool_call.get("tool_name", "")
+    #         arguments = tool_call.get("arguments", {})
+            
+    #         # Create a more specific signature that considers both tool name and argument keys
+    #         # This helps distinguish between different calls to the same tool
+    #         arg_keys = tuple(sorted(arguments.keys()))
+    #         signature = (tool_name, arg_keys)
+            
+    #         # Store attempt with its index for ordering
+    #         if signature not in tool_groups:
+    #             tool_groups[signature] = []
+    #         tool_groups[signature].append((i, attempt))
+        
+    #     # For each group, get the latest planned tool call
+    #     final_tool_calls = []
+    #     for signature, group_attempts in tool_groups.items():
+    #         # Sort by index to get chronological order
+    #         group_attempts.sort(key=lambda x: x[0])
+            
+    #         # Take the latest attempt (highest index)
+    #         latest_attempt = group_attempts[-1][1]
+    #         tool_call = latest_attempt.get("tool_call", {})
+            
+    #         # Only include if it's a valid tool call
+    #         if tool_call.get("tool_name"):
+    #             final_tool_calls.append(tool_call)
+        
+    #     return final_tool_calls
+
+    def _extract_executed_calls(self, attempts: List[Dict]) -> List[Dict]:
+        """Extract only tool calls that were actually executed."""
+        return [
+            a["tool_call"] for a in attempts 
+            if a.get("was_executed", False)
+        ]
+
+    def _extract_successful_executions(self, attempts: List[Dict]) -> List[Dict]:
+        """Extract only tool calls that executed successfully."""
+        return [
+            a for a in attempts 
+            if a.get("was_executed", False) and a.get("success", False)
+        ]
+
+    def _calculate_execution_metrics(self, attempts: List[Dict]) -> Dict[str, Any]:
+        """Calculate metrics about execution attempts."""
+        if not attempts:
+            return {
+                "total_attempts": 0,
+                "executed_attempts": 0,
+                "successful_attempts": 0,
+                "duplicate_attempts": 0,
+                "execution_rate": 0.0,
+                "success_rate": 0.0,
+                "execution_success": False
+            }
+        
+        total_attempts = len(attempts)
+        executed_attempts = len([a for a in attempts if a.get("was_executed")])
+        successful_attempts = len([a for a in attempts if a.get("success")])
+        duplicate_attempts = len([a for a in attempts if a.get("reason") == "duplicate"])
+        failed_attempts = len([a for a in attempts if a.get("was_executed") and not a.get("success")])
+        
+        # Calculate rates
+        execution_rate = executed_attempts / total_attempts if total_attempts > 0 else 0.0
+        success_rate = successful_attempts / executed_attempts if executed_attempts > 0 else 0.0
+        
+        # Overall execution success means at least one tool was executed successfully
+        # and no executed tools failed
+        execution_success = successful_attempts > 0 and failed_attempts == 0
+        
+        return {
+            "total_attempts": total_attempts,
+            "executed_attempts": executed_attempts,
+            "successful_attempts": successful_attempts,
+            "failed_attempts": failed_attempts,
+            "duplicate_attempts": duplicate_attempts,
+            "execution_rate": execution_rate,
+            "success_rate": success_rate,
+            "execution_success": execution_success,
+            "attempt_breakdown": {
+                "new_executions": len([a for a in attempts if a.get("reason") == "new tool call" and a.get("was_executed")]),
+                "clarification_executions": len([a for a in attempts if a.get("reason") == "new tool call after clarification" and a.get("was_executed")]),
+                "skipped_duplicates": duplicate_attempts,
+                "validation_failures": len([a for a in attempts if not a.get("was_executed") and a.get("reason") != "duplicate"])
+            }
+        }
     
     def evaluate_simulation(
         self,
@@ -16,7 +140,7 @@ class SimulationEvaluator:
         simulation_result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Evaluate a simulation run.
+        Evaluate a simulation run using ONLY tool call attempts.
         
         Args:
             simulation_data: Original simulation data
@@ -27,7 +151,7 @@ class SimulationEvaluator:
         """
         metrics = {}
         
-        # Extract ground truth, which may now have per-turn tool calls
+        # Extract ground truth
         ground_truth = simulation_data.get("ground_truth_tool_calls", [])
         
         # Check if ground truth has turn information
@@ -37,45 +161,28 @@ class SimulationEvaluator:
         if not has_turn_info:
             ground_truth = [{"turn": 1, **tc} for tc in ground_truth]
         
-        # Extract final tool calls
-        final_tool_calls = simulation_result.get("final_tool_calls", [])
-        
-        # Extract conversation
-        conversation = simulation_result.get("conversation", [])
-        
-        # Extract question metrics
-        questions = simulation_result.get("questions", [])
-        
-        # Extract all candidate questions if available
-        all_candidate_questions = simulation_result.get("all_candidate_questions", [])
-        
-        # Extract all tool call attempts
+        # Extract data from tool call attempts - THIS IS THE ONLY SOURCE
         all_tool_call_attempts = simulation_result.get("all_tool_call_attempts", [])
         
-        # Calculate success metrics - distinction between valid and correct
-        validity_metrics = self._calculate_validity_metrics(final_tool_calls)
-        correctness_metrics = self._calculate_correctness_metrics(ground_truth, final_tool_calls)
+        # Extract conversation and questions
+        conversation = simulation_result.get("conversation", [])
+        questions = simulation_result.get("questions", [])
+        all_candidate_questions = simulation_result.get("all_candidate_questions", [])
         
-        # Calculate conversation metrics
+        # Calculate ALL metrics directly from attempts
+        attempt_metrics = self._calculate_attempt_based_metrics(all_tool_call_attempts, ground_truth)
         conversation_metrics = self._calculate_conversation_metrics(conversation)
-        
-        # Calculate question metrics
         question_metrics = self._calculate_question_metrics(questions, all_candidate_questions)
         
         # Combine all metrics
-        metrics["validity"] = validity_metrics
-        metrics["correctness"] = correctness_metrics
+        metrics.update(attempt_metrics)
         metrics["conversation"] = conversation_metrics
         metrics["questions"] = question_metrics
         metrics["num_questions"] = len(questions)
         metrics["num_candidate_questions"] = len(all_candidate_questions)
         metrics["num_tool_call_attempts"] = len(all_tool_call_attempts)
         
-        # Overall success is achieved when tool calls are both valid and correct
-        metrics["success"] = validity_metrics["all_valid"] and correctness_metrics["exact_match"]
-        
         return metrics
-    
     def _calculate_validity_metrics(
         self,
         final_tool_calls: List[Dict[str, Any]]
@@ -329,7 +436,116 @@ class SimulationEvaluator:
             metrics["selection_rate"] = selected_count / len(all_candidate_questions) if all_candidate_questions else 0.0
         
         return metrics
-
+    
+    def _calculate_attempt_based_metrics(
+        self, 
+        attempts: List[Dict[str, Any]], 
+        ground_truth: List[Dict[str, Any]]
+        ) -> Dict[str, Any]:
+        """
+        Calculate all metrics directly from tool call attempts.
+        """
+        if not attempts:
+            return {
+                "execution": {"total_attempts": 0, "execution_success": False},
+                "validity": {"all_valid": False, "validity_rate": 0.0},
+                "correctness": {"exact_match": False, "tool_match_rate": 0.0},
+                "success": False
+            }
+        
+        # 1. EXECUTION METRICS - what actually happened
+        executed_attempts = [a for a in attempts if a.get("was_executed")]
+        successful_attempts = [a for a in attempts if a.get("success")]
+        duplicate_attempts = [a for a in attempts if a.get("reason") == "duplicate"]
+        
+        execution_metrics = {
+            "total_attempts": len(attempts),
+            "executed_attempts": len(executed_attempts),
+            "successful_attempts": len(successful_attempts),
+            "duplicate_attempts": len(duplicate_attempts),
+            "execution_rate": len(executed_attempts) / len(attempts),
+            "success_rate": len(successful_attempts) / len(executed_attempts) if executed_attempts else 0.0,
+            "execution_success": len(successful_attempts) > 0 and len(executed_attempts) == len(successful_attempts)
+        }
+        
+        # 2. VALIDITY METRICS - could these attempts have been executed?
+        # Count attempts that don't have <UNK> values (ignoring duplicates)
+        non_duplicate_attempts = [a for a in attempts if a.get("reason") != "duplicate"]
+        valid_attempts = []
+        
+        for attempt in non_duplicate_attempts:
+            tool_call = attempt.get("tool_call", {})
+            arguments = tool_call.get("arguments", {})
+            
+            # Check if any argument has <UNK>
+            has_unk = any(value == "<UNK>" for value in arguments.values())
+            if not has_unk:
+                valid_attempts.append(attempt)
+        
+        validity_metrics = {
+            "total_attempts": len(non_duplicate_attempts),
+            "valid_attempts": len(valid_attempts),
+            "validity_rate": len(valid_attempts) / len(non_duplicate_attempts) if non_duplicate_attempts else 0.0,
+            "all_valid": len(valid_attempts) == len(non_duplicate_attempts) if non_duplicate_attempts else False
+        }
+        
+        # 3. CORRECTNESS METRICS - do the attempts match ground truth?
+        # Compare successful attempts against ground truth
+        gt_tool_names = {tc.get("tool_name") for tc in ground_truth}
+        successful_tool_names = {a.get("tool_call", {}).get("tool_name") for a in successful_attempts}
+        
+        matching_tools = gt_tool_names.intersection(successful_tool_names)
+        tool_match_rate = len(matching_tools) / len(gt_tool_names) if gt_tool_names else 0.0
+        
+        # Check parameter correctness for successful attempts
+        total_params = 0
+        matching_params = 0
+        
+        for gt_tc in ground_truth:
+            gt_tool_name = gt_tc.get("tool_name")
+            gt_params = gt_tc.get("parameters", {})
+            total_params += len(gt_params)
+            
+            # Find matching successful attempt
+            for attempt in successful_attempts:
+                tool_call = attempt.get("tool_call", {})
+                if tool_call.get("tool_name") == gt_tool_name:
+                    actual_params = tool_call.get("arguments", {})
+                    
+                    for param_name, gt_value in gt_params.items():
+                        if param_name in actual_params and actual_params[param_name] == gt_value:
+                            matching_params += 1
+                    break
+        
+        param_match_rate = matching_params / total_params if total_params > 0 else 0.0
+        
+        # Exact match: same number of successful attempts as ground truth, and all match
+        exact_match = (
+            len(successful_attempts) == len(ground_truth) and
+            tool_match_rate == 1.0 and
+            param_match_rate == 1.0
+        )
+        
+        correctness_metrics = {
+            "exact_match": exact_match,
+            "tool_match_rate": tool_match_rate,
+            "param_match_rate": param_match_rate
+        }
+        
+        # 4. OVERALL SUCCESS
+        overall_success = (
+            validity_metrics["all_valid"] and
+            correctness_metrics["exact_match"] and
+            execution_metrics["execution_success"]
+        )
+        
+        return {
+            "execution": execution_metrics,
+            "validity": validity_metrics,
+            "correctness": correctness_metrics,
+            "success": overall_success
+        }
+        
 class SimulationVisualizer:
     """Class for visualizing simulation results."""
     

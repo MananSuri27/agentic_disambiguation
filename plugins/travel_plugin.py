@@ -503,6 +503,7 @@ class TravelPlugin(BasePlugin):
     
     def __init__(self):
         """Initialize the travel plugin."""
+        super().__init__()
         self.travel_api = TravelAPI()
         self._name = "travel"
         self._description = "Plugin for travel-related operations, including flight bookings, credit card management, and travel information."
