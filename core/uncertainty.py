@@ -390,4 +390,4 @@ class UncertaintyCalculator:
         Returns:
             Dynamic threshold value
         """
-        return base_threshold * (1.0 + alpha * total_clarifications)
+        return base_threshold + alpha * total_clarifications

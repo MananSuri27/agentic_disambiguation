@@ -169,7 +169,7 @@ def run_simulation(
     # Extract simulation data
     user_query = simulation_data.get("user_query", "")
     user_intent = simulation_data.get("user_intention", "")
-    follow_ups = simulation_data.get("follow_ups", [])
+    follow_ups = simulation_data.get("follow_ups", simulation_data.get("potential_follow_ups", []))
     ground_truth = simulation_data
     
     # Extract API-specific context and pass it to relevant plugins

@@ -437,7 +437,7 @@ class ReactAgent:
                 )
             
             # Continue with next step
-            observations.append(execution_result.message)
+            observations.append(execution_result.message + str(execution_result.output))
             context["observations"] = observations
         
         # Max steps reached

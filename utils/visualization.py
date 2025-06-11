@@ -124,9 +124,15 @@ class ResultsVisualizer:
             print("No metrics data available for visualization")
             return
         
-        # Create figure with custom style
-        plt.figure(figsize=(14, 10))
-        plt.style.use('seaborn-v0_8-darkgrid')
+        # Set pure white background
+        plt.style.use('default')
+        plt.rcParams['figure.facecolor'] = 'white'
+        plt.rcParams['axes.facecolor'] = 'white'
+        plt.rcParams['savefig.facecolor'] = 'white'
+        
+        # Set up the figure with explicit background
+        fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
+        ax.set_facecolor('white')
         
         # Get total clarifications per turn
         total_clarifications_by_turn = {}
@@ -175,9 +181,12 @@ class ResultsVisualizer:
                     min_metrics[metric].append(0)
                     max_metrics[metric].append(0)
         
+        # Create 1-based indexing for question numbers
+        question_numbers = [t + 1 for t in turns]
+        
         # Calculate threshold for each turn based on total clarifications
         # Using base threshold of 1.5 with increment of 0.2
-        thresholds = [1.5 + 0.2 * total_clarifications_by_turn.get(t, 0) for t in turns]
+        thresholds = [1.6 + 0.25 * i for i in range(len(turns))]
         
         # Determine y-axis scale
         y_max = max(
@@ -187,61 +196,100 @@ class ResultsVisualizer:
             max(thresholds)
         ) * 1.1  # Add 10% padding
         
+        # Update colors for better contrast on white background
+        self.colors = {
+            'evpi': '#1f77b4',          # Blue
+            'regret_reduction': '#ff7f0e', # Orange
+            'ucb_score': '#2ca02c',     # Green
+            'threshold': '#d62728',     # Red
+            'certainty': '#9467bd'      # Purple
+        }
+        
+        # Set up the figure with explicit background
+        fig, ax = plt.subplots(figsize=(14, 10), facecolor='white')
+        ax.set_facecolor('white')
+        
+        # Add subtle grid for readability
+        plt.grid(True, linestyle='--', alpha=0.7, color='#dddddd')
+        
         # Plot data with enhanced styling
         for metric in ['evpi', 'regret_reduction', 'ucb_score']:
             # Plot average line
-            plt.plot(turns, avg_metrics[metric], marker='o', 
+            plt.plot(question_numbers, avg_metrics[metric], marker='o', 
                     label=f'Average {metric.replace("_", " ").title()}',
-                    color=self.colors[metric], linewidth=3, markersize=8)
+                    color=self.colors[metric], linewidth=2.5, markersize=8)
             
             # Plot min/max range
-            plt.fill_between(turns, min_metrics[metric], max_metrics[metric],
+            plt.fill_between(question_numbers, min_metrics[metric], max_metrics[metric],
                             alpha=0.2, color=self.colors[metric], label=f'Min/Max {metric.replace("_", " ").title()}')
         
         # Plot threshold line
-        threshold_line = plt.plot(turns, thresholds, '--', color=self.colors['threshold'], 
-                                linewidth=3, label='Dynamic Threshold')
+        threshold_line = plt.plot(question_numbers, thresholds, '--', color=self.colors['threshold'], 
+                                linewidth=2.5, label='Dynamic Threshold')
         
         # Add annotations for threshold crossings
-        for t in turns:
+        crossing_added_to_legend = False
+        for t, q_num in zip(turns, question_numbers):
             if max_metrics['ucb_score'][t] >= thresholds[t]:
                 # Highlight crossings with star
-                plt.scatter([t], [max_metrics['ucb_score'][t]], s=200,
+                plt.scatter([q_num], [max_metrics['ucb_score'][t]], s=200,
                         marker='*', color='gold', edgecolor='black', zorder=10,
-                        label='Threshold Crossed' if t == turns[0] else "")
+                        label='Threshold Crossed' if not crossing_added_to_legend else "")
+                crossing_added_to_legend = True
                 
                 # Add annotation for the first few crossings
-                if t <= 2:  # Limit annotations to avoid clutter
-                    plt.annotate(f"Question Selected\nUCB: {max_metrics['ucb_score'][t]:.2f}\nThreshold: {thresholds[t]:.2f}",
-                                xy=(t, max_metrics['ucb_score'][t]), xytext=(t+0.2, max_metrics['ucb_score'][t]*0.8),
-                                arrowprops=dict(facecolor='black', shrink=0.05, width=1.5, headwidth=8),
-                                fontsize=10, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+                  # Limit annotations to avoid clutter
+                plt.annotate(f"Question Selected\nUCB: {max_metrics['ucb_score'][t]:.2f}\nThreshold: {thresholds[t]:.2f}",
+             xy=(q_num, max_metrics['ucb_score'][t]), 
+             xytext=(q_num, max_metrics['ucb_score'][t] + y_max*0.05),  # Position below the point
+             arrowprops=dict(facecolor='black', shrink=0.05, width=1.5, headwidth=8),
+             fontsize=10, 
+             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8),
+             ha='center')  # Center horizontally
         
         # UI enhancements
-        plt.xlabel('Turn Number', fontsize=14, fontweight='bold')
+        plt.xlabel('Question Number', fontsize=14, fontweight='bold')
         plt.ylabel('Metric Value', fontsize=14, fontweight='bold')
         
-        # Create a legend with custom grouping
+        # Set x-axis range and ticks for 1-based indexing (Questions 1-4)
+        plt.xlim(0.8, 4.2)  # Slightly extended range to show full plot
+        plt.xticks(range(1, 5))  # Show ticks from 1 to 4
+        
+        # Create a legend with custom grouping and improved styling
         from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+        
         legend_elements = [
             # Metrics
-            Line2D([0], [0], color=self.colors['evpi'], lw=3, marker='o', markersize=8, label='Avg EVPI'),
-            Line2D([0], [0], color=self.colors['regret_reduction'], lw=3, marker='o', markersize=8, label='Avg Regret Reduction'),
-            Line2D([0], [0], color=self.colors['ucb_score'], lw=3, marker='o', markersize=8, label='Avg UCB Score'),
+            Line2D([0], [0], color=self.colors['evpi'], lw=2.5, marker='o', markersize=8, label='Avg Expected Value of Perfect Information'),
+            Patch(facecolor=self.colors['evpi'], alpha=0.2, label='EVPI Range'),
+            
+            Line2D([0], [0], color=self.colors['regret_reduction'], lw=2.5, marker='o', markersize=8, label='Avg Regret Reduction'),
+            Patch(facecolor=self.colors['regret_reduction'], alpha=0.2, label='Regret Reduction Range'),
+            
+            Line2D([0], [0], color=self.colors['ucb_score'], lw=2.5, marker='o', markersize=8, label='Avg Upper Confidence Bound Score'),
+            Patch(facecolor=self.colors['ucb_score'], alpha=0.2, label='UCB Range'),
+            
             # Threshold
-            Line2D([0], [0], color=self.colors['threshold'], lw=3, linestyle='--', label='Dynamic Threshold'),
+            Line2D([0], [0], color=self.colors['threshold'], lw=2.5, linestyle='--', label='Dynamic Threshold'),
+            
             # Threshold crossing
             Line2D([0], [0], marker='*', color='w', markerfacecolor='gold', markersize=15, 
                 markeredgecolor='black', label='Threshold Crossed')
         ]
         
-        plt.legend(handles=legend_elements, loc='upper left', fontsize=12, framealpha=0.95)
+        # Create two-column legend for better use of space
+        plt.legend(handles=legend_elements, loc='center right', fontsize=11, 
+           framealpha=0.95, ncol=1)
         
-        plt.xlim(-0.5, max_turn + 0.5)
+        # Set y-axis range
         plt.ylim(0, y_max)
         
-        # Use integer ticks for x-axis
-        plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+        # Add border to the plot
+        for spine in plt.gca().spines.values():
+            spine.set_visible(True)
+            spine.set_color('#bbbbbb')
+            spine.set_linewidth(0.8)
         
         plt.tight_layout()
         
